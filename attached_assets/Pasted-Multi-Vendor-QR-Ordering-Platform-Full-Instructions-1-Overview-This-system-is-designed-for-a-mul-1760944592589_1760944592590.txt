@@ -1,0 +1,202 @@
+Multi-Vendor QR Ordering Platform – Full Instructions
+1. Overview
+
+This system is designed for a multi-vendor food ordering platform that supports QR-based dine-in ordering, vendor management, and captain assignment. It consists of:
+
+A landing page for vendor registration and login
+
+A Vendor Panel for restaurant owners
+
+A Captain Panel for serving staff
+
+An Admin Panel for platform management
+
+APIs for integration with the mobile app (Android/iOS)
+
+2. Landing Page (Public Portal)
+
+Purpose: To allow vendors to register, upload documentation, and log into their control panel.
+
+Functional Requirements:
+
+Vendor Registration Form:
+
+Personal Details: Name, phone, email, password, CNIC
+
+Business Details: Restaurant name, address, description, cuisine type
+
+Documents Upload: Business license, tax certificate, ID proof, logo, etc.
+
+Login Form:
+
+Email/Phone and Password authentication
+
+Post-Registration:
+
+Vendor status: “Pending Approval” until reviewed by admin
+
+Email/SMS confirmation for verification
+
+Auto-redirect approved vendors to their dashboard upon login
+
+3. Vendor Panel
+
+Purpose: To give restaurant owners full control over operations, menu, tables, orders, and captains.
+
+Key Modules:
+
+Dashboard
+
+Summary of total orders, tables, captains, and revenue.
+
+Profile & Business Settings
+
+Edit personal and restaurant information.
+
+Upload/change business documents or images.
+
+User & Captain Management
+
+Create, edit, or delete captain accounts.
+
+Assign login credentials to captains.
+
+Assign captains to specific tables.
+
+Table Management
+
+Create new tables (Table IDs start from 0).
+
+Automatically generate unique QR codes per table.
+
+Each QR contains the encoded vendor ID and table ID.
+
+Option to download or print QR codes.
+
+Assign tables to captains.
+
+Order Management
+
+View dine-in orders by table or captain.
+
+Change order status: Pending → Accepted → Preparing → Ready → Delivered.
+
+Notify captains/customers automatically upon status change.
+
+View transaction history and analytics.
+
+Menu Management
+
+Add/edit categories, items, and modifiers.
+
+Enable/disable items dynamically (e.g., sold out, unavailable).
+
+Upload photos, set prices, and tag items (popular, recommended).
+
+Reports
+
+Daily/weekly/monthly sales and order summaries.
+
+4. Captain Panel
+
+Purpose: A simplified interface for staff (captains) to manage assigned tables and handle orders.
+
+Key Modules:
+
+Login Page
+
+Captains log in using vendor-generated credentials.
+
+Dashboard
+
+Shows all assigned tables with live order status.
+
+Table View
+
+Each table displays its current order details (items, quantities, total).
+
+Ability to mark orders as served or request updates.
+
+Notifications
+
+Receive alerts when a new order is placed or updated.
+
+Track table activity in real time.
+
+5. Admin Panel
+
+Purpose: To manage the entire platform, vendors, captains, and global settings.
+
+Core Controls:
+
+Vendor Management
+
+View, approve, reject, or suspend vendor accounts.
+
+Edit or delete vendor data.
+
+Review uploaded vendor documents.
+
+Captain Oversight
+
+View all captains created by vendors.
+
+Reset credentials or reassign to vendors if needed.
+
+Order Oversight
+
+Monitor real-time orders across all vendors.
+
+Access order logs and payment records.
+
+Content Management
+
+Manage landing page content, banners, and FAQs.
+
+API Management
+
+Create, view, and control API keys for mobile app integration.
+
+Reports & Analytics
+
+Generate platform-wide performance, order, and commission reports.
+
+6. Mobile App API Integration
+
+The mobile app (customer side) will use APIs from your existing Food App API Documentation:
+
+Key Endpoints Include:
+
+/api/register, /api/login, /api/verify-otp – Authentication
+
+/api/restaurants/nearby, /api/restaurants/{id}/menu – Vendor discovery & menu
+
+/api/table/scan – Identify vendor/table from QR
+
+/api/dinein/order – Place dine-in order
+
+/api/dinein/orders – View past dine-in records
+
+These APIs will be extended with:
+
+/api/vendor/register (for vendor onboarding)
+
+/api/vendor/tables (QR and table management)
+
+/api/vendor/captains (staff management)
+
+/api/admin/vendors (approval controls)
+
+7. Workflow Summary
+
+Vendor Registration → Admin Approval → Vendor Dashboard Access
+
+Vendor Creates Tables → Unique QR Codes Generated (starting from 0)
+
+Vendor Assigns Tables to Captains → Captains View Orders for Assigned Tables
+
+Customer Scans QR → Sees Vendor Menu → Places Order
+
+Vendor Accepts & Updates Order Status → Real-Time Updates to Captain & Customer
+
+Admin Oversees All Vendors, Orders, and Payments
