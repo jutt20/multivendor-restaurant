@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { DateRange } from "react-day-picker";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, parseISO, subDays } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Grid3x3, Users, UtensilsCrossed, ShoppingCart, TrendingUp } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Grid3x3, Users, UtensilsCrossed, ShoppingCart, TrendingUp, Search } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -21,6 +22,17 @@ import {
 import type { SalesSummary, Order, KotTicket, AppUser } from "@shared/schema";
 import { useOrderStream } from "@/hooks/useOrderStream";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+} from "recharts";
 
 type VendorProfileResponse = {
   vendor?: {
@@ -28,6 +40,7 @@ type VendorProfileResponse = {
     isPickupEnabled?: boolean | null;
     isDeliveryAllowed?: boolean | null;
     isPickupAllowed?: boolean | null;
+    paymentQrCodeUrl?: string | null;
   } | null;
 };
 
@@ -38,6 +51,8 @@ type VendorRecentOrder = Order & {
     address?: string | null;
     phone?: string | null;
     email?: string | null;
+    paymentQrCodeUrl?: string | null;
+    gstin?: string | null;
   } | null;
   kotTicket?: KotTicket | null;
 };
@@ -92,8 +107,28 @@ const formatOrderTimestamp = (value: string | Date | null | undefined): string =
   }
 };
 
+const formatLocation = (city?: string | null, state?: string | null) => {
+  const parts = [city, state]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+
+  if (parts.length === 0) {
+    return "—";
+  }
+
+  return parts.join(", ");
+};
+
+const parseCurrencyToNumber = (value: string | number | null | undefined): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return value;
+  const numeric = Number.parseFloat(String(value).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 export default function VendorDashboard() {
   const { toast } = useToast();
+  const [searchTerm, setSearchTerm] = useState("");
 
   useOrderStream({
     onEvent: (event) => {
@@ -246,6 +281,90 @@ export default function VendorDashboard() {
       ? 0
       : Math.min(totalRecentOrders, firstRecentOrderIndex + recentOrders.length - 1);
 
+  const searchQuery = searchTerm.trim().toLowerCase();
+  const isSearching = searchQuery.length > 0;
+
+  const filteredRecentOrders = useMemo(() => {
+    if (!isSearching) return recentOrders;
+    return recentOrders.filter((order) => {
+      const values: Array<unknown> = [
+        order.id,
+        order.vendorId,
+        order.tableId,
+        order.tableNumber,
+        order.customerId,
+        order.customerName,
+        order.customerPhone,
+        order.status,
+        order.totalAmount,
+      ];
+
+      if (
+        values.some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(searchQuery),
+        )
+      ) {
+        return true;
+      }
+
+      return formatOrderTimestamp(order.createdAt).toLowerCase().includes(searchQuery);
+    });
+  }, [recentOrders, isSearching, searchQuery]);
+
+  const filteredDailySales = useMemo(() => {
+    if (!salesSummary?.daily) return [];
+    if (!isSearching) return salesSummary.daily;
+    return salesSummary.daily.filter((day) => {
+      const formattedDate = format(parseISO(day.date), "LLL dd, yyyy");
+      const values: Array<unknown> = [formattedDate, day.totalOrders, day.totalRevenue];
+      return values.some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(searchQuery),
+      );
+    });
+  }, [salesSummary, isSearching, searchQuery]);
+
+  const vendorCustomerList = vendorCustomers ?? [];
+
+  const filteredVendorCustomers = useMemo(() => {
+    if (!isSearching) return vendorCustomerList;
+    return vendorCustomerList.filter((customer) => {
+      const createdAt =
+        typeof customer.createdAt === "string" || customer.createdAt instanceof Date
+          ? formatOrderTimestamp(customer.createdAt)
+          : "";
+      const values: Array<unknown> = [
+        customer.id,
+        customer.name,
+        customer.phone,
+        customer.email,
+        customer.city,
+        customer.state,
+        customer.orderCount,
+        createdAt,
+      ];
+      return values.some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(searchQuery),
+      );
+    });
+  }, [vendorCustomerList, isSearching, searchQuery]);
+
+  const dailyChartData = useMemo(() => {
+    if (!salesSummary?.daily) return [];
+    return salesSummary.daily.map((day) => ({
+      dateLabel: format(parseISO(day.date), "MMM dd"),
+      orders: day.totalOrders,
+      revenue: parseCurrencyToNumber(day.totalRevenue),
+    }));
+  }, [salesSummary]);
+
+  const hasDailyChartData = dailyChartData.length > 0;
+
   const fulfillmentMutation = useMutation({
     mutationFn: async (
       updates: Partial<{ isDeliveryEnabled: boolean; isPickupEnabled: boolean }>,
@@ -328,6 +447,23 @@ export default function VendorDashboard() {
         </p>
       </div>
 
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search across dashboard tables"
+            className="pl-9"
+          />
+        </div>
+        {isSearching && (
+          <span className="text-sm text-muted-foreground">
+            Filtering recent orders, sales, and customer history
+          </span>
+        )}
+      </div>
+
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => (
           <Card key={stat.title} className="hover-elevate">
@@ -350,6 +486,70 @@ export default function VendorDashboard() {
             </CardContent>
           </Card>
         ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Revenue Trend</CardTitle>
+            <CardDescription>Daily revenue across the selected range.</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[280px]">
+            {loadingSales && !hasDailyChartData ? (
+              <Skeleton className="h-[240px] w-full" />
+            ) : hasDailyChartData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={dailyChartData} margin={{ top: 10, left: -24, right: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="dateLabel" tickLine={false} axisLine={false} />
+                  <YAxis
+                    tickFormatter={(value) => formatINR(value).replace(".00", "")}
+                    tickLine={false}
+                    axisLine={false}
+                    width={90}
+                  />
+                  <RechartsTooltip
+                    labelFormatter={(label) => label}
+                    formatter={(value) => [formatINR(value as number), "Revenue"]}
+                  />
+                  <Line type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No revenue data for this range.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Order Volume</CardTitle>
+            <CardDescription>Track fulfilled orders day by day.</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[280px]">
+            {loadingSales && !hasDailyChartData ? (
+              <Skeleton className="h-[240px] w-full" />
+            ) : hasDailyChartData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyChartData} margin={{ top: 10, left: -24, right: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="dateLabel" tickLine={false} axisLine={false} />
+                  <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
+                  <RechartsTooltip
+                    labelFormatter={(label) => label}
+                    formatter={(value) => [`${value} orders`, "Orders"]}
+                  />
+                  <Bar dataKey="orders" fill="#16a34a" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No order data for this range.
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -391,9 +591,11 @@ export default function VendorDashboard() {
                   <Skeleton key={i} className="h-16 w-full" />
                 ))}
               </div>
-            ) : recentOrders.length === 0 ? (
+            ) : filteredRecentOrders.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                No recent orders. Orders will appear here once customers start ordering.
+                {isSearching
+                  ? "No recent orders match your search."
+                  : "No recent orders. Orders will appear here once customers start ordering."}
               </div>
             ) : (
               <>
@@ -410,7 +612,7 @@ export default function VendorDashboard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {recentOrders.map((order) => {
+                      {filteredRecentOrders.map((order) => {
                         const tableRef = order.tableNumber ?? order.tableId;
                         const tableLabel = tableRef ? `Table ${tableRef}` : "—";
                         const customerLabel = order.customerName || order.customerPhone || "—";
@@ -434,14 +636,16 @@ export default function VendorDashboard() {
                 </div>
                 <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <p className="text-sm text-muted-foreground">
-                    Showing {firstRecentOrderIndex}-{lastRecentOrderIndex} of {totalRecentOrders} orders
+                    {isSearching
+                      ? `Showing ${filteredRecentOrders.length} matching order${filteredRecentOrders.length === 1 ? "" : "s"}`
+                      : `Showing ${firstRecentOrderIndex}-${lastRecentOrderIndex} of ${totalRecentOrders} orders`}
                   </p>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setRecentOrdersPage((prev) => Math.max(1, prev - 1))}
-                      disabled={!hasPreviousRecentPage}
+                      disabled={!hasPreviousRecentPage || isSearching}
                     >
                       Previous
                     </Button>
@@ -452,7 +656,7 @@ export default function VendorDashboard() {
                       variant="outline"
                       size="sm"
                       onClick={() => setRecentOrdersPage((prev) => prev + 1)}
-                      disabled={!hasNextRecentPage}
+                      disabled={!hasNextRecentPage || isSearching}
                     >
                       Next
                     </Button>
@@ -547,21 +751,31 @@ export default function VendorDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {salesSummary.daily.map((day) => (
-                      <TableRow key={day.date}>
-                        <TableCell>
-                          {format(parseISO(day.date), "LLL dd, yyyy")}
-                        </TableCell>
-                        <TableCell className="text-right">{day.totalOrders}</TableCell>
-                        <TableCell className="text-right">
-                          {formatINR(day.totalRevenue)}
+                    {filteredDailySales.length > 0 ? (
+                      filteredDailySales.map((day) => (
+                        <TableRow key={day.date}>
+                          <TableCell>
+                            {format(parseISO(day.date), "LLL dd, yyyy")}
+                          </TableCell>
+                          <TableCell className="text-right">{day.totalOrders}</TableCell>
+                          <TableCell className="text-right">
+                            {formatINR(day.totalRevenue)}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
+                          {isSearching
+                            ? "No daily sales match your search."
+                            : "No sales recorded for this range yet."}
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </div>
-              {salesSummary.totals.totalOrders === 0 && (
+              {!isSearching && salesSummary.totals.totalOrders === 0 && (
                 <p className="text-sm text-muted-foreground">
                   No sales recorded for this range yet.
                 </p>
@@ -580,21 +794,25 @@ export default function VendorDashboard() {
           <div className="space-y-1">
             <CardTitle>Customer History</CardTitle>
             <CardDescription>Customers who have visited or ordered from your restaurant.</CardDescription>
-            {fetchingCustomers && !loadingCustomers && vendorCustomers && vendorCustomers.length > 0 && (
+            {fetchingCustomers && !loadingCustomers && vendorCustomerList.length > 0 && (
               <p className="text-xs text-muted-foreground">Refreshing…</p>
             )}
           </div>
         </CardHeader>
         <CardContent>
-          {loadingCustomers && (!vendorCustomers || vendorCustomers.length === 0) ? (
+          {loadingCustomers && vendorCustomerList.length === 0 ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
                 <Skeleton key={i} className="h-16 w-full" />
               ))}
             </div>
-          ) : !vendorCustomers || vendorCustomers.length === 0 ? (
+          ) : vendorCustomerList.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               No customers with order history yet. Customers will appear here once they place orders or visit.
+            </div>
+          ) : filteredVendorCustomers.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              No customers match your search.
             </div>
           ) : (
             <div className="overflow-x-auto rounded-lg border">
@@ -603,12 +821,13 @@ export default function VendorDashboard() {
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Phone</TableHead>
+                    <TableHead>Location</TableHead>
                     <TableHead className="text-right">Total Orders</TableHead>
                     <TableHead className="text-right">First Seen</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {vendorCustomers.map((customer) => {
+                  {filteredVendorCustomers.map((customer) => {
                     const phone = customer.phone || "—";
                     const createdAt =
                       typeof customer.createdAt === "string" || customer.createdAt instanceof Date
@@ -618,6 +837,7 @@ export default function VendorDashboard() {
                       <TableRow key={customer.id}>
                         <TableCell className="font-medium">{customer.name}</TableCell>
                         <TableCell>{phone}</TableCell>
+                        <TableCell>{formatLocation(customer.city, customer.state)}</TableCell>
                         <TableCell className="text-right">{customer.orderCount}</TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground">{createdAt}</TableCell>
                       </TableRow>

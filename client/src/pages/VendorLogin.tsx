@@ -41,11 +41,18 @@ export default function VendorLogin() {
 
   useEffect(() => {
     if (user) {
-      if (user.role === "vendor") {
-        setLocation("/vendor");
-      } else if (user.role === "admin") {
-        setLocation("/admin");
-      }
+      // Small delay to ensure auth state is properly set
+      setTimeout(() => {
+        if (user.role === "vendor") {
+          setLocation("/vendor");
+        } else if (user.role === "owner") {
+          setLocation("/owner");
+        } else if (user.role === "admin") {
+          setLocation("/admin");
+        } else if (user.role === "captain") {
+          setLocation("/captain");
+        }
+      }, 100);
     }
   }, [user, setLocation]);
 
@@ -78,18 +85,26 @@ export default function VendorLogin() {
 
       return res.json();
     },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    onSuccess: async (data) => {
+      // Wait for auth query to refetch before redirecting
+      await queryClient.refetchQueries({ queryKey: ["/api/auth/user"] });
       toast({
         title: "Login Successful",
         description: `Welcome back!`,
       });
 
-      if (data.user.role === "vendor") {
-        setLocation("/vendor");
-      } else if (data.user.role === "admin") {
-        setLocation("/admin");
-      }
+      // Small delay to ensure auth state is updated in the router
+      setTimeout(() => {
+        if (data.user.role === "vendor") {
+          setLocation("/vendor");
+        } else if (data.user.role === "owner") {
+          setLocation("/owner");
+        } else if (data.user.role === "admin") {
+          setLocation("/admin");
+        } else if (data.user.role === "captain") {
+          setLocation("/captain");
+        }
+      }, 100);
     },
     onError: (error) => {
       if (error instanceof SessionConflictError) {

@@ -12,6 +12,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import type { LucideIcon } from "lucide-react";
 import {
   LayoutDashboard,
   Grid3x3,
@@ -39,10 +40,13 @@ const fallbackRestaurantName = "Hukam Mere Aaka";
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { user, isVendor, isCaptain, isAdmin } = useAuth();
+  const { user, isVendor, isOwner, isCaptain, isAdmin } = useAuth();
   const queryClient = useQueryClient();
 
-  const vendorLinks = [
+  type NavItem = { title: string; url: string; icon: LucideIcon };
+  type NavSection = { label: string; items: NavItem[] };
+
+  const vendorLinks: NavItem[] = [
     { title: "Dashboard", url: "/vendor", icon: LayoutDashboard },
     { title: "Tables", url: "/vendor/tables", icon: Grid3x3 },
     { title: "Captains", url: "/vendor/captains", icon: Users },
@@ -51,28 +55,43 @@ export function AppSidebar() {
     { title: "Profile", url: "/vendor/profile", icon: Settings },
   ];
 
-  const captainLinks = [
+  const ownerLinks: NavItem[] = [
+    { title: "Insights", url: "/owner", icon: LayoutDashboard },
+  ];
+
+  const captainLinks: NavItem[] = [
     { title: "My Tables", url: "/captain", icon: Grid3x3 },
     { title: "Orders", url: "/captain/orders", icon: ClipboardList },
   ];
 
-  const adminLinks = [
+  const adminLinks: NavItem[] = [
     { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
     { title: "Vendor Approvals", url: "/admin/vendors", icon: CheckSquare },
     { title: "App Users", url: "/admin/users", icon: Users },
     { title: "Settings", url: "/admin/settings", icon: Settings },
   ];
 
-  const items = isVendor
-    ? vendorLinks
-    : isCaptain
-    ? captainLinks
-    : isAdmin
-    ? adminLinks
-    : [];
+  const navSections: NavSection[] = (() => {
+    if (isOwner) {
+      return [{ label: "Owner Overview", items: ownerLinks }];
+    }
+    if (isVendor) {
+      return [{ label: "Restaurant Operations", items: vendorLinks }];
+    }
+    if (isCaptain) {
+      return [{ label: "Captain Tools", items: captainLinks }];
+    }
+    if (isAdmin) {
+      return [
+        { label: "Platform Control", items: adminLinks.slice(0, 3) },
+        { label: "Configuration", items: adminLinks.slice(3) },
+      ];
+    }
+    return [];
+  })();
 
   const getRoleColor = () => {
-    if (isVendor) return "text-vendor";
+    if (isVendor || isOwner) return "text-vendor";
     if (isCaptain) return "text-captain";
     if (isAdmin) return "text-admin";
     return "text-primary";
@@ -90,7 +109,7 @@ export function AppSidebar() {
 
   const { data: vendorProfile } = useQuery<VendorProfileResponse | null>({
     queryKey: ["/api/vendor/profile"],
-    enabled: isVendor,
+    enabled: isVendor || isOwner,
     retry: false,
     queryFn: async () => {
       const res = await fetch("/api/vendor/profile", {
@@ -120,7 +139,7 @@ export function AppSidebar() {
   });
 
   const restaurantName =
-    (isVendor && vendorProfile?.vendor?.restaurantName) ||
+    ((isVendor || isOwner) && vendorProfile?.vendor?.restaurantName) ||
     fallbackRestaurantName;
 
   const profileImageUrl =
@@ -143,28 +162,41 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location === item.url}>
-                    <a
-                      href={item.url}
-                      data-testid={`link-${item.title
-                        .toLowerCase()
-                        .replace(" ", "-")}`}
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </a>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {navSections.length === 0 ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <div className="px-2 py-6 text-xs text-muted-foreground">
+                No navigation items available for your role yet.
+              </div>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : (
+          navSections.map((section) => (
+            <SidebarGroup key={section.label}>
+              <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {section.items.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild isActive={location === item.url}>
+                        <a
+                          href={item.url}
+                          data-testid={`link-${item.title
+                            .toLowerCase()
+                            .replace(/\s+/g, "-")}`}
+                        >
+                          <item.icon className="h-4 w-4" />
+                          <span>{item.title}</span>
+                        </a>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))
+        )}
       </SidebarContent>
 
       <SidebarFooter className="border-t p-4">

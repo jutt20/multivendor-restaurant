@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -26,11 +26,35 @@ import AdminDashboard from "@/pages/admin/AdminDashboard";
 import VendorApprovals from "@/pages/admin/VendorApprovals";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import UsersManagement from "@/pages/admin/UsersManagement";
+import OwnerDashboard from "@/pages/owner/OwnerDashboard";
 import { useEffect } from "react";
-import { useToast } from "@/hooks/use-toast";
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
+  const [location, setLocation] = useLocation();
+
+  const isVendor = user?.role === "vendor";
+  const isOwner = user?.role === "owner";
+  const isCaptain = user?.role === "captain";
+  const isAdmin = user?.role === "admin";
+
+  // Redirect authenticated users to their default dashboard if on public route
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+
+    const publicRoutes = ["/", "/login"];
+    if (publicRoutes.includes(location)) {
+      if (isVendor) {
+        setLocation("/vendor");
+      } else if (isOwner) {
+        setLocation("/owner");
+      } else if (isCaptain) {
+        setLocation("/captain");
+      } else if (isAdmin) {
+        setLocation("/admin");
+      }
+    }
+  }, [isAuthenticated, user, location, isVendor, isOwner, isCaptain, isAdmin, setLocation]);
 
   // 1️⃣ While auth is loading, show loader (NOT Landing)
   if (isLoading) {
@@ -52,10 +76,26 @@ function Router() {
     );
   }
 
-  // 3️⃣ Authenticated routes
-  const isVendor = user?.role === "vendor";
-  const isCaptain = user?.role === "captain";
-  const isAdmin = user?.role === "admin";
+  // Redirect component for mismatched routes
+  function RedirectToDashboard() {
+    useEffect(() => {
+      if (isVendor) {
+        setLocation("/vendor");
+      } else if (isOwner) {
+        setLocation("/owner");
+      } else if (isCaptain) {
+        setLocation("/captain");
+      } else if (isAdmin) {
+        setLocation("/admin");
+      }
+    }, [isVendor, isOwner, isCaptain, isAdmin, setLocation]);
+    
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p>Redirecting...</p>
+      </div>
+    );
+  }
 
   const sidebarStyle = {
     "--sidebar-width": "16rem",
@@ -85,6 +125,12 @@ function Router() {
                   <Route path="/" component={VendorDashboard} />
                 </>
               )}
+              {isOwner && (
+                <>
+                  <Route path="/owner" component={OwnerDashboard} />
+                  <Route path="/" component={OwnerDashboard} />
+                </>
+              )}
               {isCaptain && (
                 <>
                   <Route path="/captain/orders" component={CaptainOrders} />
@@ -101,7 +147,7 @@ function Router() {
                   <Route path="/" component={AdminDashboard} />
                 </>
               )}
-              <Route component={NotFound} />
+              <Route component={RedirectToDashboard} />
             </Switch>
           </main>
         </div>

@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Clock, ChefHat, UtensilsCrossed } from "lucide-react";
-import type { Order, KotTicket } from "@shared/schema";
+import { Clock, ChefHat, Plus, UtensilsCrossed } from "lucide-react";
+import type { MenuCategory, MenuItem, Order, Table, KotTicket } from "@shared/schema";
 import { useOrderStream } from "@/hooks/useOrderStream";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import ManualOrderDialog from "@/components/orders/ManualOrderDialog";
 
 type CaptainOrder = Order & {
   tableNumber: number | null;
@@ -27,8 +28,13 @@ type CaptainOrder = Order & {
     name: string | null;
     address?: string | null;
     phone?: string | null;
+    gstin?: string | null;
   } | null;
   kotTicket?: KotTicket | null;
+};
+
+type CaptainTable = Table & {
+  label?: string | null;
 };
 
 type OrderItem = {
@@ -62,9 +68,35 @@ export default function CaptainOrders() {
     refetchInterval: 5000,
   });
 
+  const { data: tables, isLoading: loadingTables } = useQuery<CaptainTable[]>({
+    queryKey: ["/api/captain/tables"],
+    refetchInterval: 5000,
+  });
+
+  const { data: menuItems, isLoading: loadingMenuItems } = useQuery<MenuItem[]>({
+    queryKey: ["/api/captain/menu/items"],
+  });
+
+  const { data: categories, isLoading: loadingCategories } = useQuery<MenuCategory[]>({
+    queryKey: ["/api/captain/menu/categories"],
+  });
+
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [printTargetOrder, setPrintTargetOrder] = useState<CaptainOrder | null>(null);
   const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
+
+  const tableOptions = useMemo(
+    () =>
+      (tables ?? []).map((table) => ({
+        id: table.id,
+        tableNumber: table.tableNumber,
+        label: table.label ?? undefined,
+      })),
+    [tables],
+  );
+
+  const manualOrderMenuItems = useMemo(() => menuItems ?? [], [menuItems]);
+  const manualOrderDisabled = loadingTables || loadingMenuItems || loadingCategories;
 
   const handlePrintKot = () => {
     if (!printTargetOrder) {
@@ -80,8 +112,10 @@ export default function CaptainOrders() {
           restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
           restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
           restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+          restaurantGstin: printTargetOrder.vendorDetails?.gstin ?? undefined,
           title: "Kitchen Order Ticket",
           ticketNumber: printTargetOrder.kotTicket?.ticketNumber ?? `KOT-${printTargetOrder.id}`,
+          hidePricing: true,
         });
       } else {
         printA4Kot({
@@ -90,8 +124,10 @@ export default function CaptainOrders() {
           restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
           restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
           restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+          restaurantGstin: printTargetOrder.vendorDetails?.gstin ?? undefined,
           title: "Kitchen Order Ticket",
           ticketNumber: printTargetOrder.kotTicket?.ticketNumber ?? `KOT-${printTargetOrder.id}`,
+          hidePricing: true,
         });
       }
       toast({
@@ -139,11 +175,28 @@ export default function CaptainOrders() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Orders</h1>
-        <p className="text-muted-foreground mt-2">
-          View and manage dine-in orders for your assigned tables
-        </p>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Orders</h1>
+          <p className="text-muted-foreground mt-2">
+            View and manage dine-in orders for your assigned tables
+          </p>
+        </div>
+        <ManualOrderDialog
+          trigger={
+            <Button disabled={manualOrderDisabled}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Order
+            </Button>
+          }
+          tables={tableOptions}
+          menuItems={manualOrderMenuItems}
+          categories={categories ?? []}
+          submitEndpoint="/api/captain/orders"
+          tablesLoading={loadingTables}
+          itemsLoading={loadingMenuItems || loadingCategories}
+          invalidateQueryKeys={[["/api/captain/orders"], ["/api/captain/tables"]]}
+        />
       </div>
 
       {isLoading ? (

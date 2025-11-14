@@ -39,7 +39,7 @@ export const users = pgTable("users", {
   fullName: varchar("full_name"),
   phoneNumber: varchar("phone_number"),
 
-  role: varchar("role", { length: 20 }).notNull().default('vendor'), // vendor, captain, admin
+  role: varchar("role", { length: 20 }).notNull().default('vendor'), // vendor, captain, admin, owner
   isActive: boolean("is_active").default(true),
   isVerified: boolean("is_verified").default(false),
   createdAt: timestamp("created_at").defaultNow(),
@@ -56,6 +56,7 @@ export type User = typeof users.$inferSelect;
 export const vendors = pgTable("vendors", {
   id: serial("id").primaryKey(),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: 'set null' }), // One owner per vendor
   
   // Business Details
   restaurantName: varchar("restaurant_name", { length: 255 }).notNull(),
@@ -67,6 +68,7 @@ export const vendors = pgTable("vendors", {
   phone: varchar("phone", { length: 50 }),
   cnic: varchar("cnic", { length: 50 }),
   gstin: varchar("gstin", { length: 20 }),
+  paymentQrCodeUrl: text("payment_qr_code_url"),
   
   // Location for nearby search
   latitude: numeric("latitude", { precision: 10, scale: 7 }),
@@ -101,6 +103,10 @@ export const vendorRelations = relations(vendors, ({ one, many }) => ({
     fields: [vendors.userId],
     references: [users.id],
   }),
+  owner: one(users, {
+    fields: [vendors.ownerId],
+    references: [users.id],
+  }),
   tables: many(tables),
   captains: many(captains),
   menuCategories: many(menuCategories),
@@ -118,6 +124,11 @@ export const insertVendorSchema = createInsertSchema(vendors).omit({
   isPickupEnabled: z.boolean().optional(),
   isDeliveryAllowed: z.boolean().optional(),
   isPickupAllowed: z.boolean().optional(),
+  paymentQrCodeUrl: z
+    .string()
+    .max(500)
+    .or(z.null())
+    .optional(),
   gstin: z
     .string()
     .regex(/^[A-Za-z0-9]{1,20}$/, "GSTIN must be alphanumeric (max 20 characters)")

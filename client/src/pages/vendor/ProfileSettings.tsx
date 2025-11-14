@@ -33,6 +33,7 @@ type VendorProfileResponse = {
     isPickupEnabled?: boolean | null;
     isDeliveryAllowed?: boolean | null;
     isPickupAllowed?: boolean | null;
+    paymentQrCodeUrl?: string | null;
   } | null;
   user: {
     fullName?: string | null;
@@ -86,6 +87,7 @@ export default function ProfileSettings() {
 
   const [formState, setFormState] = useState<FormState>(emptyState);
   const [initialState, setInitialState] = useState<FormState>(emptyState);
+  const [paymentQrUrl, setPaymentQrUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) return;
@@ -111,6 +113,7 @@ export default function ProfileSettings() {
 
     setFormState(next);
     setInitialState(next);
+    setPaymentQrUrl(profile.vendor?.paymentQrCodeUrl ?? null);
   }, [profile]);
 
   const hasChanges = useMemo(() => {
@@ -148,6 +151,7 @@ export default function ProfileSettings() {
         setInitialState(next);
       }
       queryClient.setQueryData(["/api/vendor/profile"], data);
+      setPaymentQrUrl(data?.vendor?.paymentQrCodeUrl ?? null);
       toast({ title: "Profile updated" });
       queryClient.invalidateQueries({ queryKey: ["/api/vendor/profile"] });
       queryClient.invalidateQueries({ queryKey: ["/api/vendor/stats"] });
@@ -155,6 +159,128 @@ export default function ProfileSettings() {
     onError: (error: any) => {
       toast({
         title: "Failed to update profile",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const uploadPaymentQr = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("paymentQr", file);
+
+      const response = await fetch("/api/vendor/payment-qr", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        let message = "Failed to upload payment QR";
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload?.message) {
+            message = errorPayload.message;
+          }
+        } catch {
+          // ignore parse errors
+        }
+        throw new Error(message);
+      }
+
+      return (await response.json()) as {
+        paymentQrCodeUrl?: string | null;
+        vendor?: VendorProfileResponse["vendor"];
+        message?: string;
+      };
+    },
+    onSuccess: (data) => {
+      const nextUrl =
+        data?.paymentQrCodeUrl ?? data?.vendor?.paymentQrCodeUrl ?? null;
+      setPaymentQrUrl(nextUrl ?? null);
+      queryClient.setQueryData<VendorProfileResponse | undefined>(
+        ["/api/vendor/profile"],
+        (previous) => {
+          if (!previous) {
+            return previous;
+          }
+          return {
+            ...previous,
+            vendor: {
+              ...(previous.vendor ?? {}),
+              paymentQrCodeUrl: nextUrl ?? null,
+            },
+          };
+        },
+      );
+      toast({
+        title: "Payment QR saved",
+        description: "Customers will see the QR code on printed bills.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/profile"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to upload QR",
+        description: error?.message || "Please try again with a PNG or JPG file.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const removePaymentQr = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/vendor/payment-qr", {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        let message = "Failed to remove payment QR";
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload?.message) {
+            message = errorPayload.message;
+          }
+        } catch {
+          // ignore parse errors
+        }
+        throw new Error(message);
+      }
+
+      return (await response.json()) as {
+        paymentQrCodeUrl?: string | null;
+        vendor?: VendorProfileResponse["vendor"];
+        message?: string;
+      };
+    },
+    onSuccess: (data) => {
+      setPaymentQrUrl(data?.paymentQrCodeUrl ?? null);
+      queryClient.setQueryData<VendorProfileResponse | undefined>(
+        ["/api/vendor/profile"],
+        (previous) => {
+          if (!previous) {
+            return previous;
+          }
+          return {
+            ...previous,
+            vendor: {
+              ...(previous.vendor ?? {}),
+              paymentQrCodeUrl: null,
+            },
+          };
+        },
+      );
+      toast({
+        title: "Payment QR removed",
+        description: "Upload a new QR code anytime.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/profile"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to remove QR",
         description: error?.message || "Please try again.",
         variant: "destructive",
       });
@@ -188,6 +314,43 @@ export default function ProfileSettings() {
     }
 
     updateProfile.mutate(payload);
+  };
+
+  const handlePaymentQrChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const input = event.target;
+
+    if (!file) {
+      input.value = "";
+      return;
+    }
+
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/jpg"]);
+    if (!allowedTypes.has(file.type)) {
+      toast({
+        title: "Unsupported file type",
+        description: "Please select a PNG or JPG image.",
+        variant: "destructive",
+      });
+      input.value = "";
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please upload an image smaller than 5 MB.",
+        variant: "destructive",
+      });
+      input.value = "";
+      return;
+    }
+
+    uploadPaymentQr.mutate(file, {
+      onSettled: () => {
+        input.value = "";
+      },
+    });
   };
 
   const vendorStatus = profile?.vendor?.status ?? "pending";
@@ -390,6 +553,57 @@ export default function ProfileSettings() {
                     }}
                     disabled={!pickupAllowed || updateProfile.isPending}
                   />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Online Payment QR</CardTitle>
+              <CardDescription>
+                Upload a QR code image to let guests pay instantly from printed bills.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start">
+                <div className="flex h-40 w-40 items-center justify-center rounded-md border bg-muted/40 p-2">
+                  {paymentQrUrl ? (
+                    <img
+                      src={paymentQrUrl}
+                      alt="Online payment QR"
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  ) : (
+                    <p className="text-center text-xs text-muted-foreground">
+                      No QR uploaded yet
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="paymentQrUpload">Upload QR image</Label>
+                    <Input
+                      id="paymentQrUpload"
+                      type="file"
+                      accept="image/png,image/jpeg"
+                      onChange={handlePaymentQrChange}
+                      disabled={uploadPaymentQr.isPending}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      PNG or JPG, up to 5 MB. This QR appears on printed invoices and receipts.
+                    </p>
+                  </div>
+                  {paymentQrUrl && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => removePaymentQr.mutate()}
+                      disabled={removePaymentQr.isPending}
+                    >
+                      {removePaymentQr.isPending ? "Removing..." : "Remove QR code"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>

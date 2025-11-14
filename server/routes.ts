@@ -2,7 +2,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated, isVendor, isCaptain, isAdmin } from "./replitAuth";
+import { setupAuth, isAuthenticated, isVendor, isCaptain, isAdmin, isOwner, isVendorOrOwner } from "./replitAuth";
 import { z } from "zod";
 import {
   insertVendorSchema,
@@ -24,6 +24,7 @@ import {
 } from "@shared/schema";
 import { db, pool } from "./db";
 import { eq, inArray } from "drizzle-orm";
+import { appUsers } from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -68,6 +69,34 @@ const upload = multer({
     cb(new Error('Only images and PDFs are allowed'));
   },
 });
+
+const getAbsoluteUploadPath = (fileUrl?: string | null): string | null => {
+  if (!fileUrl || typeof fileUrl !== "string") {
+    return null;
+  }
+
+  if (!fileUrl.startsWith("/uploads/")) {
+    return null;
+  }
+
+  const relativePath = fileUrl.replace(/^\//, "");
+  return path.join(process.cwd(), relativePath);
+};
+
+const removeUploadFile = async (fileUrl?: string | null): Promise<void> => {
+  const absolutePath = getAbsoluteUploadPath(fileUrl);
+  if (!absolutePath) {
+    return;
+  }
+
+  try {
+    await fs.promises.unlink(absolutePath);
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") {
+      console.warn("Failed to remove upload file:", absolutePath, error);
+    }
+  }
+};
 
 const parseBoolean = (value: any): boolean | undefined => {
   if (typeof value === "boolean") return value;
@@ -402,6 +431,7 @@ const updateVendorProfileSchema = z.object({
   cnic: z.string().max(50).optional(),
   gstin: gstinUpdateSchema.optional(),
   image: z.string().min(1).max(500).optional(),
+  paymentQrCodeUrl: z.union([z.string().min(1).max(500), z.null()]).optional(),
   isDeliveryEnabled: z.boolean().optional(),
   isPickupEnabled: z.boolean().optional(),
   fullName: z.string().max(255).optional(),
@@ -638,11 +668,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   app.use('/uploads', express.static(uploadDir));
 
+  // Helper function to get vendor for vendor or owner
+  const getVendorForUser = async (userId: string, userRole: string) => {
+    if (userRole === 'owner') {
+      return await storage.getVendorByOwnerId(userId);
+    } else {
+      return await storage.getVendorByUserId(userId);
+    }
+  };
+
   // Vendor stats
-  app.get('/api/vendor/stats', isAuthenticated, isVendor, async (req: any, res) => {
+  app.get('/api/vendor/stats', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      const vendor = await getVendorForUser(userId, user.role);
       
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
@@ -656,10 +700,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/vendor/sales', isAuthenticated, isVendor, async (req: any, res) => {
+  app.get('/api/vendor/sales', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const vendor = await getVendorForUser(userId, user.role);
 
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
@@ -679,16 +727,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Vendor profile
-  app.get('/api/vendor/profile', isAuthenticated, isVendor, async (req: any, res) => {
+  app.get('/api/vendor/profile', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const vendor = await getVendorForUser(userId, user.role);
 
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
       }
 
-      const user = await storage.getUser(userId);
       res.json({
         vendor,
         user: user
@@ -706,10 +757,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/vendor/customers', isAuthenticated, isVendor, async (req: any, res) => {
+  app.get('/api/vendor/customers', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const vendor = await getVendorForUser(userId, user.role);
 
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
@@ -725,10 +780,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/vendor/profile', isAuthenticated, isVendor, async (req: any, res) => {
+  app.put('/api/vendor/profile', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const vendor = await getVendorForUser(userId, user.role);
 
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
@@ -746,6 +805,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "cnic",
         "gstin",
         "image",
+    "paymentQrCodeUrl",
         "fullName",
         "phoneNumber",
       ] as const;
@@ -822,6 +882,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "cnic",
         "gstin",
         "image",
+    "paymentQrCodeUrl",
         "isDeliveryEnabled",
         "isPickupEnabled",
       ] as const;
@@ -874,6 +935,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       res.status(500).json({ message: error?.message || "Failed to update vendor profile" });
+    }
+  });
+
+  app.post(
+    "/api/vendor/payment-qr",
+    isAuthenticated,
+    isVendor,
+    upload.single("paymentQr"),
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const vendor = await storage.getVendorByUserId(userId);
+
+        if (!vendor) {
+          if (req.file) {
+            await removeUploadFile(`/uploads/${req.file.filename}`);
+          }
+          return res.status(404).json({ message: "Vendor not found" });
+        }
+
+        const file = req.file;
+        if (!file) {
+          return res.status(400).json({ message: "Payment QR image is required" });
+        }
+
+        const newUrl = `/uploads/${file.filename}`;
+
+        if (vendor.paymentQrCodeUrl && vendor.paymentQrCodeUrl !== newUrl) {
+          await removeUploadFile(vendor.paymentQrCodeUrl);
+        }
+
+        await storage.updateVendor(vendor.id, {
+          paymentQrCodeUrl: newUrl,
+        });
+        await storage.syncDuplicateVendors(userId, vendor.id, {
+          paymentQrCodeUrl: newUrl,
+        });
+
+        const updatedVendor = await storage.getVendor(vendor.id);
+
+        res.json({
+          message: "Payment QR updated",
+          paymentQrCodeUrl: updatedVendor?.paymentQrCodeUrl ?? null,
+          vendor: updatedVendor ?? null,
+        });
+      } catch (error: any) {
+        console.error("Error uploading payment QR:", error);
+        res
+          .status(500)
+          .json({ message: error?.message || "Failed to upload payment QR code" });
+      }
+    },
+  );
+
+  app.delete("/api/vendor/payment-qr", isAuthenticated, isVendor, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const vendor = await storage.getVendorByUserId(userId);
+
+      if (!vendor) {
+        return res.status(404).json({ message: "Vendor not found" });
+      }
+
+      if (vendor.paymentQrCodeUrl) {
+        await removeUploadFile(vendor.paymentQrCodeUrl);
+      }
+
+      await storage.updateVendor(vendor.id, {
+        paymentQrCodeUrl: null,
+      });
+      await storage.syncDuplicateVendors(userId, vendor.id, {
+        paymentQrCodeUrl: null,
+      });
+
+      const updatedVendor = await storage.getVendor(vendor.id);
+
+      res.json({
+        message: "Payment QR removed",
+        paymentQrCodeUrl: updatedVendor?.paymentQrCodeUrl ?? null,
+        vendor: updatedVendor ?? null,
+      });
+    } catch (error: any) {
+      console.error("Error removing payment QR:", error);
+      res
+        .status(500)
+        .json({ message: error?.message || "Failed to remove payment QR code" });
     }
   });
 
@@ -2218,10 +2365,14 @@ app.get(
   });
 
   // Get vendor orders with vendor details
-  app.get('/api/vendor/orders', isAuthenticated, isVendor, async (req: any, res) => {
+  app.get('/api/vendor/orders', isAuthenticated, isVendorOrOwner, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const vendor = await storage.getVendorByUserId(userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const vendor = await getVendorForUser(userId, user.role);
 
       if (!vendor) {
         return res.status(404).json({ message: "Vendor not found" });
@@ -2266,6 +2417,8 @@ app.get(
           address: vendor.address,
           phone: vendor.phone,
           email: vendorUser?.email ?? null,
+          paymentQrCodeUrl: vendor.paymentQrCodeUrl,
+          gstin: vendor.gstin ?? null,
         },
         kotTicket: kotMap.get(order.id) ?? null,
       }));
@@ -2410,6 +2563,7 @@ app.get(
             name: vendor.restaurantName,
             address: vendor.address,
             phone: vendor.phone,
+            paymentQrCodeUrl: vendor.paymentQrCodeUrl,
           }
         : null;
 
@@ -2635,11 +2789,272 @@ app.get(
   app.get('/api/admin/users', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const search = typeof req.query.search === "string" ? req.query.search : undefined;
-      const usersWithStats = await storage.getAppUsersWithStats(search);
+      const isPhoneVerified = typeof req.query.isPhoneVerified === "string"
+        ? req.query.isPhoneVerified === "true"
+        : undefined;
+      const city = typeof req.query.city === "string" ? req.query.city : undefined;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+
+      const usersWithStats = await storage.getAppUsersWithStats({
+        search,
+        isPhoneVerified,
+        city,
+        state,
+      });
       res.json(usersWithStats);
     } catch (error) {
       console.error("Error fetching app users:", error);
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Get all system users (vendor, captain, admin)
+  app.get('/api/admin/system-users', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const role = typeof req.query.role === "string" ? req.query.role : undefined;
+      const isActive = typeof req.query.isActive === "string" 
+        ? req.query.isActive === "true" 
+        : undefined;
+      const isVerified = typeof req.query.isVerified === "string"
+        ? req.query.isVerified === "true"
+        : undefined;
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+
+      const systemUsers = await storage.getAllSystemUsers({
+        role,
+        isActive,
+        isVerified,
+        search,
+      });
+      res.json(systemUsers);
+    } catch (error) {
+      console.error("Error fetching system users:", error);
+      res.status(500).json({ message: "Failed to fetch system users" });
+    }
+  });
+
+  // Create system user
+  app.post('/api/admin/system-users', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const { fullName, email, phoneNumber, role, password, isActive, isVerified, vendorId } = req.body;
+
+      // Validation
+      if (!email || typeof email !== "string" || !email.trim()) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      if (!password || typeof password !== "string" || password.length < 6) {
+        return res.status(400).json({ message: "Password is required and must be at least 6 characters" });
+      }
+
+      if (!role || !["admin", "vendor", "captain", "owner"].includes(role)) {
+        return res.status(400).json({ message: "Valid role is required (admin, vendor, captain, or owner)" });
+      }
+
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(email.trim());
+      if (existingUser) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Create user
+      const newUser = await storage.upsertUser({
+        id: uuidv4(),
+        email: email.trim(),
+        password: hashedPassword,
+        fullName: fullName?.trim() || null,
+        phoneNumber: phoneNumber?.trim() || null,
+        role: role,
+        isActive: isActive !== undefined ? (isActive === true || isActive === "true") : true,
+        isVerified: isVerified !== undefined ? (isVerified === true || isVerified === "true") : false,
+      });
+
+      // If role is owner, handle vendor assignment
+      if (role === "owner" && vendorId !== undefined) {
+        const parsedVendorId = typeof vendorId === "string" 
+          ? Number.parseInt(vendorId, 10) 
+          : typeof vendorId === "number" 
+          ? vendorId 
+          : null;
+        
+        if (parsedVendorId && !Number.isNaN(parsedVendorId)) {
+          const vendor = await storage.getVendor(parsedVendorId);
+          if (vendor) {
+            // Update vendor to set this user as owner
+            await storage.updateVendor(parsedVendorId, { ownerId: newUser.id });
+          }
+        }
+      }
+
+      res.status(201).json(newUser);
+    } catch (error: any) {
+      console.error("Error creating system user:", error);
+      res.status(500).json({ message: error?.message || "Failed to create system user" });
+    }
+  });
+
+  // Update system user
+  app.put('/api/admin/system-users/:id', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const updates: Partial<{ fullName: string; email: string; phoneNumber: string; role: string; isActive: boolean; isVerified: boolean }> = {};
+
+      if (req.body.fullName !== undefined) {
+        updates.fullName = typeof req.body.fullName === "string" ? req.body.fullName.trim() : null;
+      }
+      if (req.body.email !== undefined) {
+        updates.email = typeof req.body.email === "string" ? req.body.email.trim() || null : null;
+      }
+      if (req.body.phoneNumber !== undefined) {
+        updates.phoneNumber = typeof req.body.phoneNumber === "string" ? req.body.phoneNumber.trim() || null : null;
+      }
+      if (req.body.role !== undefined && ["admin", "vendor", "captain", "owner"].includes(req.body.role)) {
+        updates.role = req.body.role;
+      }
+      if (req.body.isActive !== undefined) {
+        updates.isActive = req.body.isActive === true || req.body.isActive === "true";
+      }
+      if (req.body.isVerified !== undefined) {
+        updates.isVerified = req.body.isVerified === true || req.body.isVerified === "true";
+      }
+
+      const updatedUser = await storage.updateUser(userId, updates);
+      
+      // If role is owner, handle vendor assignment
+      if (req.body.role === "owner" && req.body.vendorId !== undefined) {
+        const vendorId = typeof req.body.vendorId === "string" 
+          ? Number.parseInt(req.body.vendorId, 10) 
+          : typeof req.body.vendorId === "number" 
+          ? req.body.vendorId 
+          : null;
+        
+        if (vendorId && !Number.isNaN(vendorId)) {
+          const vendor = await storage.getVendor(vendorId);
+          if (vendor) {
+            // Update vendor to set this user as owner
+            await storage.updateVendor(vendorId, { ownerId: userId });
+          }
+        }
+      }
+      
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("Error updating system user:", error);
+      res.status(500).json({ message: "Failed to update system user" });
+    }
+  });
+
+  // Delete system user (soft delete - set isActive to false)
+  app.delete('/api/admin/system-users/:id', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      
+      // Prevent deleting yourself
+      if (userId === req.user.claims.sub) {
+        return res.status(400).json({ message: "You cannot delete your own account" });
+      }
+
+      // Soft delete by setting isActive to false
+      const updatedUser = await storage.updateUser(userId, { isActive: false });
+      res.json({ message: "User deactivated successfully", user: updatedUser });
+    } catch (error) {
+      console.error("Error deleting system user:", error);
+      res.status(500).json({ message: "Failed to delete system user" });
+    }
+  });
+
+  // Toggle system user status
+  app.patch('/api/admin/system-users/:id/status', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const isActive = req.body.isActive === true || req.body.isActive === "true";
+      
+      // Prevent deactivating yourself
+      if (!isActive && userId === req.user.claims.sub) {
+        return res.status(400).json({ message: "You cannot deactivate your own account" });
+      }
+
+      const updatedUser = await storage.updateUser(userId, { isActive });
+      res.json({ message: `User ${isActive ? "activated" : "deactivated"} successfully`, user: updatedUser });
+    } catch (error) {
+      console.error("Error updating system user status:", error);
+      res.status(500).json({ message: "Failed to update user status" });
+    }
+  });
+
+  // Update app user
+  app.put('/api/admin/users/:id', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      const updates: Partial<{ name: string; email: string; phone: string; city: string; state: string; isPhoneVerified: boolean }> = {};
+
+      if (req.body.name !== undefined) {
+        updates.name = typeof req.body.name === "string" ? req.body.name.trim() : null;
+      }
+      if (req.body.email !== undefined) {
+        updates.email = typeof req.body.email === "string" ? req.body.email.trim() || null : null;
+      }
+      if (req.body.phone !== undefined) {
+        updates.phone = typeof req.body.phone === "string" ? req.body.phone.trim() : null;
+      }
+      if (req.body.city !== undefined) {
+        updates.city = typeof req.body.city === "string" ? req.body.city.trim() || null : null;
+      }
+      if (req.body.state !== undefined) {
+        updates.state = typeof req.body.state === "string" ? req.body.state.trim() || null : null;
+      }
+      if (req.body.isPhoneVerified !== undefined) {
+        updates.isPhoneVerified = req.body.isPhoneVerified === true || req.body.isPhoneVerified === "true";
+      }
+
+      const updatedUser = await storage.updateAppUser(userId, updates);
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("Error updating app user:", error);
+      res.status(500).json({ message: "Failed to update app user" });
+    }
+  });
+
+  // Delete app user
+  app.delete('/api/admin/users/:id', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      // For app users, we can do a hard delete since they're just customers
+      // But first check if they have orders - if so, we might want to soft delete
+      // For now, let's do a hard delete
+      await db.delete(appUsers).where(eq(appUsers.id, userId));
+      res.json({ message: "User deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting app user:", error);
+      res.status(500).json({ message: "Failed to delete app user" });
+    }
+  });
+
+  // Toggle app user verification
+  app.patch('/api/admin/users/:id/verification', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      const isPhoneVerified = req.body.isPhoneVerified === true || req.body.isPhoneVerified === "true";
+      const updatedUser = await storage.updateAppUser(userId, { isPhoneVerified });
+      res.json({ message: `User ${isPhoneVerified ? "verified" : "unverified"} successfully`, user: updatedUser });
+    } catch (error) {
+      console.error("Error updating app user verification:", error);
+      res.status(500).json({ message: "Failed to update user verification" });
     }
   });
 

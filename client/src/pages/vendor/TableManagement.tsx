@@ -285,6 +285,7 @@ export default function TableManagement() {
   const [noOfTables, setNoOfTables] = useState<number>(1);
   const [tableFilter, setTableFilter] = useState<"all" | "manual" | "auto">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "available" | "booked">("all");
+  const [captainAssignmentFilter, setCaptainAssignmentFilter] = useState<"all" | "assigned" | "unassigned">("all");
   const { toast } = useToast();
 
   const { data: tables, isLoading } = useQuery<Table[]>({
@@ -453,12 +454,21 @@ export default function TableManagement() {
       : sortTables(tables ?? []);
 
   const filteredTables = filteredByType.filter((table) => {
-    if (statusFilter === "available") {
-      return table.isActive;
+    if (statusFilter === "available" && !table.isActive) {
+      return false;
     }
-    if (statusFilter === "booked") {
-      return !table.isActive;
+    if (statusFilter === "booked" && table.isActive) {
+      return false;
     }
+
+    if (captainAssignmentFilter === "assigned" && !table.captainId) {
+      return false;
+    }
+
+    if (captainAssignmentFilter === "unassigned" && table.captainId) {
+      return false;
+    }
+
     return true;
   });
 
@@ -556,6 +566,21 @@ export default function TableManagement() {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="available">Available</SelectItem>
                   <SelectItem value="booked">Booked</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                value={captainAssignmentFilter}
+                onValueChange={(value) =>
+                  setCaptainAssignmentFilter(value as "all" | "assigned" | "unassigned")
+                }
+              >
+                <SelectTrigger className="w-[220px]" data-testid="select-table-captain-filter">
+                  <SelectValue placeholder="Filter by captain assignment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Tables</SelectItem>
+                  <SelectItem value="assigned">Assigned to Captain</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -267,6 +269,8 @@ function CaptainLoginForm({ onClose }: { onClose: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
 
   const handleLogin = async () => {
     setError("");
@@ -277,19 +281,26 @@ function CaptainLoginForm({ onClose }: { onClose: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
+        credentials: "include",
       });
       
       if (!response.ok) {
         const data = await response.json();
         setError(data.message || "Login failed");
+        setIsLoading(false);
         return;
       }
       
-      // Login successful, reload to redirect to dashboard
-      window.location.href = "/captain";
+      // Wait for auth query to refetch before redirecting
+      await queryClient.refetchQueries({ queryKey: ["/api/auth/user"] });
+      
+      // Small delay to ensure auth state is updated in the router
+      setTimeout(() => {
+        setLocation("/captain");
+        onClose();
+      }, 100);
     } catch (err) {
       setError("Login failed. Please try again.");
-    } finally {
       setIsLoading(false);
     }
   };

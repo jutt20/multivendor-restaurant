@@ -219,3 +219,31 @@ export const isAdmin: RequestHandler = async (req, res, next) => {
   
   next();
 };
+
+export const isOwner: RequestHandler = async (req, res, next) => {
+  const userId = (req.user as any)?.claims?.sub;
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  
+  const user = await storage.getUser(userId);
+  if (user?.role !== 'owner') {
+    return res.status(403).json({ message: "Forbidden: Owner access required" });
+  }
+  
+  next();
+};
+
+export const isVendorOrOwner: RequestHandler = async (req, res, next) => {
+  const userId = (req.user as any)?.claims?.sub;
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  
+  const user = await storage.getUser(userId);
+  if (user?.role !== 'vendor' && user?.role !== 'owner') {
+    return res.status(403).json({ message: "Forbidden: Vendor or Owner access required" });
+  }
+  
+  next();
+};

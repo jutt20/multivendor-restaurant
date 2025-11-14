@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { MenuCategory, Order } from "@shared/schema";
@@ -391,267 +392,265 @@ export function ManualOrderDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Create Order</DialogTitle>
-          <DialogDescription>Build a dine-in order without scanning a QR code.</DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-3xl overflow-hidden p-0">
+        <div className="flex max-h-[85vh] flex-col">
+          <DialogHeader className="border-b px-6 py-4">
+            <DialogTitle>Create Order</DialogTitle>
+            <DialogDescription>
+              Build a dine-in order without scanning a QR code.
+            </DialogDescription>
+          </DialogHeader>
 
-        {tablesLoading || itemsLoading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-20 w-full" />
-          </div>
-        ) : dialogDisabled ? (
-          <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-            {!hasTables
-              ? "No tables available. Create a table before placing manual orders."
-              : "No active menu items available. Add menu items to create orders."}
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {allowTableSelection ? (
-              <div className="space-y-2">
-                <Label>Table</Label>
-                <Select
-                  value={selectedTableId}
-                  onValueChange={setSelectedTableId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select table" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tables.map((table) => (
-                      <SelectItem key={table.id} value={table.id.toString()}>
-                        {resolveTableLabel(table)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <Label className="text-sm text-muted-foreground">Table</Label>
-                <div className="rounded-md border px-3 py-2 text-sm font-medium">
-                  {resolveTableLabel(
-                    tables.find((table) => String(table.id) === selectedTableId) ??
-                      tables.find((table) => table.id === defaultTableId) ??
-                      { id: defaultTableId ?? 0 },
+          <ScrollArea className="flex-1">
+            <div className="space-y-4 px-6 py-4">
+              {tablesLoading || itemsLoading ? (
+                <div className="space-y-4">
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                </div>
+              ) : dialogDisabled ? (
+                <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  {!hasTables
+                    ? "No tables available. Create a table before placing manual orders."
+                    : "No active menu items available. Add menu items to create orders."}
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {allowTableSelection ? (
+                    <div className="space-y-2">
+                      <Label>Table</Label>
+                      <Select value={selectedTableId} onValueChange={setSelectedTableId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select table" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tables.map((table) => (
+                            <SelectItem key={table.id} value={table.id.toString()}>
+                              {resolveTableLabel(table)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Label className="text-sm text-muted-foreground">Table</Label>
+                      <div className="rounded-md border px-3 py-2 text-sm font-medium">
+                        {resolveTableLabel(
+                          tables.find((table) => String(table.id) === selectedTableId) ??
+                            tables.find((table) => table.id === defaultTableId) ??
+                            { id: defaultTableId ?? 0 },
+                        )}
+                      </div>
+                    </div>
                   )}
-                </div>
-              </div>
-            )}
 
-            <div className="space-y-4 rounded-md border p-4">
-              <div className="grid gap-3 md:grid-cols-[2fr,1fr,auto]">
-                <div className="space-y-2">
-                  <Label>Add Item</Label>
-                  <Select
-                    value={selectedItemId}
-                    onValueChange={setSelectedItemId}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose menu item" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableItems.map((item) => (
-                        <SelectItem key={item.id} value={item.id.toString()}>
-                          {item.name} · {formatCurrency(toNumber(item.price) || 0)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                  <div className="space-y-4 rounded-md border p-4">
+                    <div className="grid gap-3 md:grid-cols-[2fr,1fr,auto]">
+                      <div className="space-y-2">
+                        <Label>Add Item</Label>
+                        <Select value={selectedItemId} onValueChange={setSelectedItemId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose menu item" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableItems.map((item) => (
+                              <SelectItem key={item.id} value={item.id.toString()}>
+                                {item.name} · {formatCurrency(toNumber(item.price) || 0)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-                <div className="space-y-2">
-                  <Label>Quantity</Label>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={() => setQuantity((value) => Math.max(1, value - 1))}
-                    >
-                      <Minus className="h-4 w-4" />
-                    </Button>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={quantity}
-                      onChange={(event) =>
-                        setQuantity(Math.max(1, Number(event.target.value)))
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={() => setQuantity((value) => value + 1)}
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    className="w-full"
-                    onClick={handleAddItem}
-                  >
-                    Add
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {orderLines.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No items added yet. Select a menu item and click Add to build the order.
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {enrichedOrderLines.map((line) => (
-                      <div
-                        key={line.itemId}
-                        className="flex flex-col gap-3 rounded-md border p-3 md:flex-row md:items-center md:justify-between"
-                      >
-                        <div>
-                          <p className="font-medium">{line.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatCurrency(line.price)} × {line.quantity}
-                          </p>
-                          {line.gstRate > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              GST {line.gstRate}%{" "}
-                              {line.gstMode === "include"
-                                ? "included in total"
-                                : `adds ${formatCurrency(line.gstAmount)}`}
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={() =>
-                                handleUpdateQuantity(line.itemId, line.quantity - 1)
-                              }
-                              disabled={line.quantity <= 1}
-                            >
-                              <Minus className="h-4 w-4" />
-                            </Button>
-                            <Input
-                              type="number"
-                              min={1}
-                              className="w-16"
-                              value={line.quantity}
-                              onChange={(event) =>
-                                handleUpdateQuantity(
-                                  line.itemId,
-                                  Math.max(1, Number(event.target.value)),
-                                )
-                              }
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={() =>
-                                handleUpdateQuantity(line.itemId, line.quantity + 1)
-                              }
-                            >
-                              <Plus className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          <div className="text-sm font-semibold">
-                            {formatCurrency(line.lineTotal)}
-                          </div>
+                      <div className="space-y-2">
+                        <Label>Quantity</Label>
+                        <div className="flex items-center gap-2">
                           <Button
                             type="button"
-                            variant="ghost"
+                            variant="outline"
                             size="icon"
-                            onClick={() => handleRemoveLine(line.itemId)}
+                            onClick={() => setQuantity((value) => Math.max(1, value - 1))}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Minus className="h-4 w-4" />
+                          </Button>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={quantity}
+                            onChange={(event) =>
+                              setQuantity(Math.max(1, Number(event.target.value)))
+                            }
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={() => setQuantity((value) => value + 1)}
+                          >
+                            <Plus className="h-4 w-4" />
                           </Button>
                         </div>
                       </div>
-                    ))}
+
+                      <div className="flex items-end">
+                        <Button type="button" className="w-full" onClick={handleAddItem}>
+                          Add
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {orderLines.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No items added yet. Select a menu item and click Add to build the order.
+                        </p>
+                      ) : (
+                        <div className="space-y-3">
+                          {enrichedOrderLines.map((line) => (
+                            <div
+                              key={line.itemId}
+                              className="flex flex-col gap-3 rounded-md border p-3 md:flex-row md:items-center md:justify-between"
+                            >
+                              <div>
+                                <p className="font-medium">{line.name}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {formatCurrency(line.price)} × {line.quantity}
+                                </p>
+                                {line.gstRate > 0 && (
+                                  <p className="text-xs text-muted-foreground">
+                                    GST {line.gstRate}%{" "}
+                                    {line.gstMode === "include"
+                                      ? "included in total"
+                                      : `adds ${formatCurrency(line.gstAmount)}`}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() =>
+                                      handleUpdateQuantity(line.itemId, line.quantity - 1)
+                                    }
+                                    disabled={line.quantity <= 1}
+                                  >
+                                    <Minus className="h-4 w-4" />
+                                  </Button>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    className="w-16"
+                                    value={line.quantity}
+                                    onChange={(event) =>
+                                      handleUpdateQuantity(
+                                        line.itemId,
+                                        Math.max(1, Number(event.target.value)),
+                                      )
+                                    }
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() =>
+                                      handleUpdateQuantity(line.itemId, line.quantity + 1)
+                                    }
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                                <div className="text-sm font-semibold">
+                                  {formatCurrency(line.lineTotal)}
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleRemoveLine(line.itemId)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Customer name (optional)</Label>
-                <Input
-                  value={customerName}
-                  onChange={(event) => setCustomerName(event.target.value)}
-                  placeholder="Guest name"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Customer phone (optional)</Label>
-                <Input
-                  value={customerPhone}
-                  onChange={(event) => setCustomerPhone(event.target.value)}
-                  placeholder="Contact number"
-                />
-              </div>
-            </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Customer name (optional)</Label>
+                      <Input
+                        value={customerName}
+                        onChange={(event) => setCustomerName(event.target.value)}
+                        placeholder="Guest name"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Customer phone (optional)</Label>
+                      <Input
+                        value={customerPhone}
+                        onChange={(event) => setCustomerPhone(event.target.value)}
+                        placeholder="Contact number"
+                      />
+                    </div>
+                  </div>
 
-            <div className="space-y-2">
-              <Label>Notes for kitchen (optional)</Label>
-              <Textarea
-                value={customerNotes}
-                onChange={(event) => setCustomerNotes(event.target.value)}
-                placeholder="Add any special instructions..."
-              />
-            </div>
+                  <div className="space-y-2">
+                    <Label>Notes for kitchen (optional)</Label>
+                    <Textarea
+                      value={customerNotes}
+                      onChange={(event) => setCustomerNotes(event.target.value)}
+                      placeholder="Add any special instructions..."
+                    />
+                  </div>
 
-            <div className="space-y-2 rounded-md bg-muted px-4 py-3 text-sm">
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span>Subtotal</span>
-                <span>{formatCurrency(totals.subtotal)}</span>
-              </div>
-              {totals.gstIncluded > 0 && (
-                <div className="flex items-center justify-between text-muted-foreground">
-                  <span>GST (included)</span>
-                  <span>{formatCurrency(totals.gstIncluded)}</span>
+                  <div className="space-y-2 rounded-md bg-muted px-4 py-3 text-sm">
+                    <div className="flex items-center justify-between text-muted-foreground">
+                      <span>Subtotal</span>
+                      <span>{formatCurrency(totals.subtotal)}</span>
+                    </div>
+                    {totals.gstIncluded > 0 && (
+                      <div className="flex items-center justify-between text-muted-foreground">
+                        <span>GST (included)</span>
+                        <span>{formatCurrency(totals.gstIncluded)}</span>
+                      </div>
+                    )}
+                    {totals.gstSeparate > 0 && (
+                      <div className="flex items-center justify-between text-muted-foreground">
+                        <span>GST (separate)</span>
+                        <span>{formatCurrency(totals.gstSeparate)}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-base font-semibold">
+                      <span>Total</span>
+                      <span>{formatCurrency(totals.total)}</span>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="w-full"
+                    onClick={() => placeOrderMutation.mutate()}
+                    disabled={
+                      placeOrderMutation.isPending ||
+                      !selectedTableId ||
+                      orderLines.length === 0 ||
+                      totals.total <= 0
+                    }
+                  >
+                    {placeOrderMutation.isPending ? "Placing order..." : "Place order"}
+                  </Button>
                 </div>
               )}
-              {totals.gstSeparate > 0 && (
-                <div className="flex items-center justify-between text-muted-foreground">
-                  <span>GST (separate)</span>
-                  <span>{formatCurrency(totals.gstSeparate)}</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between text-base font-semibold">
-                <span>Total</span>
-                <span>{formatCurrency(totals.total)}</span>
-              </div>
             </div>
-
-            <Button
-              type="button"
-              className="w-full"
-              onClick={() => placeOrderMutation.mutate()}
-              disabled={
-                placeOrderMutation.isPending ||
-                !selectedTableId ||
-                orderLines.length === 0 ||
-                totals.total <= 0
-              }
-            >
-              {placeOrderMutation.isPending ? "Placing order..." : "Place order"}
-            </Button>
-          </div>
-        )}
+          </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   );

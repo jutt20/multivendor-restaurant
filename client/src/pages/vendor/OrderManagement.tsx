@@ -6,7 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LucideIcon } from "lucide-react";
-import { ChefHat, Clock, Plus, Printer, Home, Truck, Package, ClipboardList } from "lucide-react";
+import { ChefHat, Clock, Plus, Printer, Home, Truck, Package, ClipboardList, MapPin, User, Phone, AlertCircle } from "lucide-react";
 import { PaymentType, printA4Invoice, printA4Kot, printThermalReceipt, type ReceiptItem } from "@/lib/receipt-utils";
 import type { MenuAddon, MenuCategory, MenuItem, Order, Table, KotTicket } from "@shared/schema";
 import ManualOrderDialog from "@/components/orders/ManualOrderDialog";
@@ -23,6 +23,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useOrderStream } from "@/hooks/useOrderStream";
+import { formatDistanceToNow } from "date-fns";
+import { cn } from "@/lib/utils";
 
 type MenuItemWithAddons = MenuItem & {
   addons?: MenuAddon[];
@@ -36,6 +38,8 @@ type PrintableOrder = Order & {
     address?: string | null;
     phone?: string | null;
     email?: string | null;
+    paymentQrCodeUrl?: string | null;
+    gstin?: string | null;
   } | null;
   kotTicket?: KotTicket | null;
   tableNumber?: number | null;
@@ -178,7 +182,7 @@ const mapOrderToFilterValue = (
   const status = normalizeStatusValue(order.status);
 
   if (type === "dining") {
-    if (status === "delivered" || status === "served") return "served";
+    if (status === "completed" || status === "delivered" || status === "served") return "served";
     if (status === "ready") return "ready";
     if (status === "preparing") return "preparing";
     if (status === "accepted") return "pending";
@@ -230,6 +234,47 @@ const normalizeRateValue = (value: unknown): number => {
   return Number(numeric.toFixed(2));
 };
 
+const formatRelativeTime = (date: string | Date | null | undefined): string => {
+  if (!date) return "—";
+  try {
+    const dateObj = typeof date === "string" ? new Date(date) : date;
+    if (isNaN(dateObj.getTime())) return "—";
+    return formatDistanceToNow(dateObj, { addSuffix: true });
+  } catch {
+    return "—";
+  }
+};
+
+const getOrderUrgency = (order: PrintableOrder): "high" | "medium" | "low" => {
+  if (!order.createdAt) return "low";
+  const created = new Date(order.createdAt);
+  const now = new Date();
+  const minutesSinceCreated = (now.getTime() - created.getTime()) / (1000 * 60);
+  
+  const status = normalizeStatusValue(order.status);
+  if (status === "pending" || status === "accepted") {
+    if (minutesSinceCreated > 15) return "high";
+    if (minutesSinceCreated > 10) return "medium";
+  }
+  if (status === "preparing" && minutesSinceCreated > 20) return "high";
+  
+  return "low";
+};
+
+const formatINR = (value: number | string | null | undefined): string => {
+  if (value === null || value === undefined || value === "") {
+    return "₹0.00";
+  }
+  const numeric = typeof value === "number" ? value : Number.parseFloat(String(value));
+  const amount = Number.isFinite(numeric) ? numeric : 0;
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+};
+
 export default function OrderManagement() {
   const { toast } = useToast();
 
@@ -252,11 +297,27 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
     queryKey: ["/api/vendor/tables"],
   });
 
+  const completeOrderMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      await apiRequest("PUT", `/api/vendor/orders/${orderId}/status`, { status: "completed" });
+    },
+    onSuccess: async () => {
+      await queryClient.refetchQueries({ queryKey: ordersQueryKey, type: "active" });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/captain/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/tables"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/captain/tables"] });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+    },
+  });
+
   const { data: menuItems, isLoading: loadingMenuItems } = useQuery<MenuItemWithAddons[]>({
     queryKey: ["/api/vendor/menu/items"],
   });
 
-  const { data: categories } = useQuery<MenuCategory[]>({
+  const { data: categories, isLoading: loadingCategories } = useQuery<MenuCategory[]>({
     queryKey: ["/api/vendor/menu/categories"],
   });
 
@@ -408,11 +469,12 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
     setPaymentType(null);
   };
 
-const handlePrintBill = () => {
+const handlePrintBill = async () => {
   if (!printTargetOrder) {
     return;
   }
 
+  const orderId = printTargetOrder.id;
   const items = parseOrderItems(printTargetOrder);
 
   if (billFormat === "a4") {
@@ -426,20 +488,15 @@ const handlePrintBill = () => {
     }
 
     try {
-      printA4Invoice({
+      await printA4Invoice({
         order: printTargetOrder,
         items,
         paymentType,
         restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
         restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
         restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+        paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
       });
-
-      toast({
-        title: "Success",
-        description: "A4 bill sent to printer",
-      });
-      closePrintDialog();
     } catch (error) {
       console.error("Receipt print error:", error);
       toast({
@@ -447,24 +504,21 @@ const handlePrintBill = () => {
         description: "Failed to generate bill. Please try again.",
         variant: "destructive",
       });
+      return;
     }
   } else {
     try {
-      printThermalReceipt({
+      await printThermalReceipt({
         order: printTargetOrder,
         items,
+        paymentType: paymentType ?? undefined,
         restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
         restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
         restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+        paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
         title: "Customer Bill",
-        ticketNumber: `BILL-${printTargetOrder.id}`,
+        ticketNumber: `BILL-${orderId}`,
       });
-
-      toast({
-        title: "Success",
-        description: "Thermal bill sent to printer",
-      });
-      closePrintDialog();
     } catch (error) {
       console.error("Thermal bill print error:", error);
       toast({
@@ -472,8 +526,27 @@ const handlePrintBill = () => {
         description: "Failed to print thermal bill. Please try again.",
         variant: "destructive",
       });
+      return;
     }
   }
+
+  try {
+    await completeOrderMutation.mutateAsync(orderId);
+  } catch (error) {
+    console.error("Failed to mark order completed after billing:", error);
+    toast({
+      title: "Order completion failed",
+      description: "Bill was printed, but the order could not be marked completed. Please retry.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  toast({
+    title: "Bill generated",
+    description: "Order closed and table marked available.",
+  });
+  closePrintDialog();
 };
 
 const openKotDialog = (order: PrintableOrder) => {
@@ -504,6 +577,7 @@ const handlePrintKot = () => {
         restaurantPhone: kotTargetOrder.vendorDetails?.phone ?? undefined,
         title: "Kitchen Order Ticket",
         ticketNumber: kotTargetOrder.kotTicket?.ticketNumber ?? `KOT-${kotTargetOrder.id}`,
+        hidePricing: true,
       });
     } else {
       printA4Kot({
@@ -514,6 +588,7 @@ const handlePrintKot = () => {
         restaurantPhone: kotTargetOrder.vendorDetails?.phone ?? undefined,
         title: "Kitchen Order Ticket",
         ticketNumber: kotTargetOrder.kotTicket?.ticketNumber ?? `KOT-${kotTargetOrder.id}`,
+        hidePricing: true,
       });
     }
 
@@ -549,7 +624,7 @@ const handlePrintKot = () => {
 
       queryClient.setQueryData<PrintableOrder[]>(ordersQueryKey, (old) => {
         if (!old) return old;
-        if (status === "delivered") {
+        if (status === "delivered" || status === "completed") {
           return old.filter((order) => order.id !== orderId);
         }
         return old.map((order) => (order.id === orderId ? { ...order, status } : order));
@@ -583,12 +658,12 @@ const handlePrintKot = () => {
 
   /** ✅ Workflow helpers */
   const getNextStatus = (current: string) => {
-    const flow = ["pending", "accepted", "preparing", "ready", "delivered"];
+    const flow = ["pending", "accepted", "preparing", "ready", "delivered", "completed"];
     const idx = flow.indexOf(current);
     return flow[idx + 1] || current;
   };
 
-  const canAdvanceStatus = (status: string) => status !== "delivered";
+  const canAdvanceStatus = (status: string) => status !== "completed";
 
   const tableOptions = useMemo(
     () =>
@@ -602,7 +677,7 @@ const handlePrintKot = () => {
 
   const manualOrderMenuItems = useMemo(() => menuItems ?? [], [menuItems]);
 
-  const manualOrderDisabled = loadingTables || loadingMenuItems;
+  const manualOrderDisabled = loadingTables || loadingMenuItems || loadingCategories;
 
   const statusCounts = useMemo(() => {
     const counts = createInitialStatusCount();
@@ -720,90 +795,112 @@ const handlePrintKot = () => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Order Management</h1>
-          <p className="text-muted-foreground mt-2">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">Order Management</h1>
+          <p className="text-muted-foreground">
             {activeOrderTypeConfig.description}
           </p>
         </div>
         {orderType === "dining" && (
           <ManualOrderDialog
             trigger={
-              <Button disabled={manualOrderDisabled}>
-                <Plus className="mr-2 h-4 w-4" />
+              <Button disabled={manualOrderDisabled} size="lg" className="gap-2">
+                <Plus className="h-4 w-4" />
                 New Order
               </Button>
             }
             tables={tableOptions}
             menuItems={manualOrderMenuItems}
+            categories={categories ?? []}
             submitEndpoint="/api/vendor/orders"
             tablesLoading={loadingTables}
-            itemsLoading={loadingMenuItems}
+            itemsLoading={loadingMenuItems || loadingCategories}
             invalidateQueryKeys={[ordersQueryKey, ["/api/vendor/tables"]]}
             onOrderCreated={() => setPaymentType(null)}
           />
         )}
       </div>
 
-      <Tabs
-        value={orderType}
-        onValueChange={(value) => setOrderType(value as OrderType)}
-        className="w-full"
-      >
-        <TabsList className="flex w-full flex-wrap gap-2 md:w-auto">
-          {ORDER_TYPES.map((typeConfig) => {
-            const Icon = typeConfig.icon;
-            const count =
-              typeConfig.value === "all"
-                ? totalOrdersCount
-                : orderTypeCounts[typeConfig.value as ResolvedOrderType] ?? 0;
+      <div className="space-y-4">
+        <div>
+          <Tabs
+            value={orderType}
+            onValueChange={(value) => setOrderType(value as OrderType)}
+            className="w-full"
+          >
+            <TabsList className="inline-flex h-10 items-center justify-start rounded-lg bg-muted p-1 text-muted-foreground w-full md:w-auto">
+              {ORDER_TYPES.map((typeConfig) => {
+                const Icon = typeConfig.icon;
+                const count =
+                  typeConfig.value === "all"
+                    ? totalOrdersCount
+                    : orderTypeCounts[typeConfig.value as ResolvedOrderType] ?? 0;
 
-            return (
-              <TabsTrigger
-                key={typeConfig.value}
-                value={typeConfig.value}
-                className="flex items-center gap-2 data-[state=active]:shadow-md"
-              >
-                <Icon className="h-4 w-4" />
-                <span>{typeConfig.label}</span>
-                <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
-                  {count}
-                </span>
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
-      </Tabs>
+                return (
+                  <TabsTrigger
+                    key={typeConfig.value}
+                    value={typeConfig.value}
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span>{typeConfig.label}</span>
+                    {count > 0 && (
+                      <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                        {count}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </Tabs>
+        </div>
 
-      <Tabs
-        value={statusFilter}
-        onValueChange={(value) => setStatusFilter(value as StatusFilterValue)}
-        className="w-full"
-      >
-        <TabsList className="flex w-full flex-wrap gap-2 md:w-auto">
-          {STATUS_FILTERS[orderType].map((option) => (
-            <TabsTrigger
-              key={option.value}
-              value={option.value}
-              className="data-[state=active]:shadow-md"
-            >
-              <span>{option.label}</span>
-              <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
-                {statusCounts[option.value] ?? 0}
-              </span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+        <div>
+          <Tabs
+            value={statusFilter}
+            onValueChange={(value) => setStatusFilter(value as StatusFilterValue)}
+            className="w-full"
+          >
+            <TabsList className="inline-flex h-9 items-center justify-start rounded-lg bg-muted p-1 text-muted-foreground w-full md:w-auto overflow-x-auto">
+              {STATUS_FILTERS[orderType].map((option) => {
+                const count = statusCounts[option.value] ?? 0;
+                return (
+                  <TabsTrigger
+                    key={option.value}
+                    value={option.value}
+                    className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                  >
+                    <span>{option.label}</span>
+                    {count > 0 && (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                        {count}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </Tabs>
+        </div>
+      </div>
 
       {isLoading ? (
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-40 w-full" />
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-6 w-32 mb-2" />
+                <Skeleton className="h-4 w-24" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-20 w-full" />
+              </CardContent>
+            </Card>
           ))}
         </div>
       ) : filteredOrders.length > 0 ? (
-        <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filteredOrders.map((order) => {
             const parsedItems = parseOrderItems(order);
             const resolvedType = resolveOrderType(order);
@@ -811,35 +908,188 @@ const handlePrintKot = () => {
             const tableLabel = order.tableNumber ?? order.tableId ?? "N/A";
             const deliveryAddress = order.deliveryAddress;
             const pickupReference = order.pickupReference;
+            const urgency = getOrderUrgency(order);
+            const relativeTime = formatRelativeTime(order.createdAt);
 
             return (
             <Card
               key={order.id}
-              className="hover-elevate"
+              className={cn(
+                "group transition-all duration-200 hover:shadow-lg border-2",
+                urgency === "high" && "border-red-200 dark:border-red-900/30 bg-red-50/50 dark:bg-red-950/20",
+                urgency === "medium" && "border-orange-200 dark:border-orange-900/30 bg-orange-50/30 dark:bg-orange-950/10",
+                urgency === "low" && "hover:border-primary/50"
+              )}
               data-testid={`card-order-${order.id}`}
             >
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="flex items-center gap-3">
-                      <span>Order #{order.id}</span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase text-muted-foreground">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <CardTitle className="text-lg font-bold">
+                        Order #{order.id}
+                      </CardTitle>
+                      <StatusBadge status={order.status as any} className="text-xs" />
+                      {urgency === "high" && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                          <AlertCircle className="h-3 w-3" />
+                          Urgent
+                        </span>
+                      )}
+                    </div>
+                    
+                    <div className="flex items-center gap-3 text-sm">
+                      <span className={cn(
+                        "inline-flex items-center gap-1.5 px-2 py-1 rounded-md font-medium text-xs",
+                        resolvedType === "dining" && "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+                        resolvedType === "delivery" && "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+                        resolvedType === "pickup" && "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400"
+                      )}>
+                        {resolvedType === "dining" && <Home className="h-3 w-3" />}
+                        {resolvedType === "delivery" && <Truck className="h-3 w-3" />}
+                        {resolvedType === "pickup" && <Package className="h-3 w-3" />}
                         {typeLabel}
                       </span>
-                      <StatusBadge status={order.status as any} />
-                    </CardTitle>
+                    </div>
 
-                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="h-4 w-4" />
-                        {new Date(order.createdAt!).toLocaleString()}
+                    <div className="flex items-center justify-between pt-1">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Clock className="h-3.5 w-3.5" />
+                        <span className="font-medium">{relativeTime}</span>
                       </div>
-                      <div className="flex items-center gap-1.5 font-semibold text-green-600">
-                        ₹{order.totalAmount}
+                      <div className="text-base font-bold text-green-600 dark:text-green-400">
+                        {formatINR(order.totalAmount)}
                       </div>
                     </div>
                   </div>
+                </div>
+              </CardHeader>
 
+              <CardContent className="space-y-4 pt-0">
+                {/* Customer Information */}
+                <div className="space-y-2 rounded-lg bg-muted/50 p-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{order.customerName || "Guest"}</span>
+                  </div>
+                  {order.customerPhone && (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Phone className="h-4 w-4" />
+                      <span>{order.customerPhone}</span>
+                    </div>
+                  )}
+                  {resolvedType === "dining" && (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Home className="h-4 w-4" />
+                      <span>Table {tableLabel}</span>
+                    </div>
+                  )}
+                  {resolvedType === "delivery" && deliveryAddress && (
+                    <div className="flex items-start gap-2 text-muted-foreground">
+                      <MapPin className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span className="text-xs leading-relaxed">{deliveryAddress}</span>
+                    </div>
+                  )}
+                  {resolvedType === "pickup" && pickupReference && (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Package className="h-4 w-4" />
+                      <span>Ref: {pickupReference}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Order Items */}
+                <div className="space-y-2">
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <span>Order Items</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      ({parsedItems.length} {parsedItems.length === 1 ? "item" : "items"})
+                    </span>
+                  </h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {parsedItems.length > 0 ? (
+                      parsedItems.map((item, idx) => {
+                        const baseAmount =
+                          item.gstMode === "include" ? item.lineTotal : item.baseSubtotal;
+                        return (
+                          <div
+                            key={idx}
+                            className="flex flex-col gap-1 rounded-md bg-background p-2 text-sm border border-border/50"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-medium">
+                                {item.quantity}x {item.name}
+                              </span>
+                              <span className="font-mono font-semibold text-sm">
+                                {formatINR(baseAmount)}
+                              </span>
+                            </div>
+                            {item.gstAmount > 0 && item.gstMode === "exclude" && (
+                              <div className="flex items-baseline justify-between text-xs text-muted-foreground pl-2">
+                                <span>GST {item.gstRate}%</span>
+                                <span>{formatINR(item.gstAmount)}</span>
+                              </div>
+                            )}
+                            {item.gstAmount > 0 && item.gstMode === "include" && (
+                              <div className="text-xs text-muted-foreground pl-2">
+                                GST {item.gstRate}% included ({formatINR(item.gstAmount)})
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-sm text-muted-foreground italic py-2 text-center">
+                        No items recorded
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Customer Notes */}
+                {order.customerNotes && (
+                  <div className="rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-xs font-semibold text-amber-900 dark:text-amber-200 mb-1">
+                          Special Notes
+                        </div>
+                        <p className="text-sm text-amber-800 dark:text-amber-300">
+                          {order.customerNotes}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* KOT Information */}
+                <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ChefHat className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-semibold text-sm">Kitchen Ticket</span>
+                    </div>
+                    {order.kotTicket?.createdAt && (
+                      <span className="text-xs text-muted-foreground">
+                        {formatRelativeTime(order.kotTicket.createdAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground pl-6">
+                    {order.kotTicket
+                      ? `KOT #${order.kotTicket.ticketNumber}`
+                      : "Generating KOT..."}
+                  </div>
+                  {order.kotTicket?.customerNotes && (
+                    <p className="text-xs text-muted-foreground pl-6 mt-1">
+                      {order.kotTicket.customerNotes}
+                    </p>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-col gap-2 pt-2 border-t">
                   {canAdvanceStatus(order.status) && (
                     <Button
                       size="sm"
@@ -850,146 +1100,31 @@ const handlePrintKot = () => {
                         })
                       }
                       disabled={updateStatusMutation.isPending}
+                      className="w-full font-semibold"
                     >
                       Mark as {getNextStatus(order.status)}
                     </Button>
                   )}
-                </div>
-              </CardHeader>
-
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Customer:</span>{" "}
-                      <span className="font-medium">
-                        {order.customerName || "Guest"}
-                      </span>
-                    </div>
-                    {order.customerPhone && (
-                      <div>
-                        <span className="text-muted-foreground">Phone:</span>{" "}
-                        <span className="font-medium">{order.customerPhone}</span>
-                      </div>
-                    )}
-                    {resolvedType === "dining" && (
-                      <div>
-                        <span className="text-muted-foreground">Table:</span>{" "}
-                        <span className="font-medium">
-                          {tableLabel}
-                        </span>
-                      </div>
-                    )}
-                    {resolvedType === "delivery" && deliveryAddress && (
-                      <div className="col-span-2">
-                        <span className="text-muted-foreground">Address:</span>{" "}
-                        <span className="font-medium">
-                          {deliveryAddress}
-                        </span>
-                      </div>
-                    )}
-                    {resolvedType === "pickup" && pickupReference && (
-                      <div>
-                        <span className="text-muted-foreground">Pickup Ref:</span>{" "}
-                        <span className="font-medium">
-                          {pickupReference}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border-t pt-3">
-                    <h4 className="font-semibold text-sm mb-2">Order Items</h4>
-                    <div className="space-y-2">
-                      {parsedItems.length > 0 ? (
-                        parsedItems.map((item, idx) => {
-                          const baseAmount =
-                            item.gstMode === "include" ? item.lineTotal : item.baseSubtotal;
-                          return (
-                          <div
-                            key={idx}
-                            className="flex flex-col gap-1 text-sm"
-                          >
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span>
-                                {item.quantity}x {item.name}
-                              </span>
-                              <span className="font-mono">
-                                ₹{baseAmount.toFixed(2)}
-                              </span>
-                            </div>
-                            {item.gstAmount > 0 && item.gstMode === "exclude" && (
-                              <div className="flex items-baseline justify-between text-xs text-muted-foreground">
-                                <span>GST {item.gstRate}%</span>
-                                <span>₹{item.gstAmount.toFixed(2)}</span>
-                              </div>
-                            )}
-                            {item.gstAmount > 0 && item.gstMode === "include" && (
-                              <div className="text-xs text-muted-foreground">
-                                GST {item.gstRate}% included (₹{item.gstAmount.toFixed(2)})
-                              </div>
-                            )}
-                          </div>
-                          );
-                        })
-                      ) : (
-                        <div className="text-sm text-muted-foreground italic">
-                          No items recorded
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {order.customerNotes && (
-                    <div className="border-t pt-3">
-                      <span className="text-sm text-muted-foreground">Notes: </span>
-                      <span className="text-sm">{order.customerNotes}</span>
-                    </div>
-                  )}
-
-                  <div className="border-t pt-3 mt-3 space-y-3">
-                    <div className="flex flex-col gap-1 text-sm">
-                      <div className="flex items-center justify-between font-semibold">
-                        <span>Kitchen Order Ticket</span>
-                        {order.kotTicket?.createdAt && (
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(order.kotTicket.createdAt).toLocaleTimeString()}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {order.kotTicket
-                          ? `KOT #${order.kotTicket.ticketNumber}`
-                          : "Generating KOT..."}
-                      </div>
-                      {order.kotTicket?.customerNotes && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {order.kotTicket.customerNotes}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="w-full"
-                        onClick={() => openKotDialog(order)}
-                        disabled={!order.kotTicket}
-                      >
-                        <ChefHat className="mr-2 h-4 w-4" />
-                        Print KOT
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full"
-                        onClick={() => openPrintDialog(order)}
-                      >
-                        <Printer className="h-4 w-4 mr-2" />
-                        Generate Bill (A4)
-                      </Button>
-                    </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => openKotDialog(order)}
+                      disabled={!order.kotTicket}
+                    >
+                      <ChefHat className="mr-2 h-4 w-4" />
+                      KOT
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => openPrintDialog(order)}
+                    >
+                      <Printer className="mr-2 h-4 w-4" />
+                      Bill
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -1000,19 +1135,19 @@ const handlePrintKot = () => {
       ) : orders && orders.length > 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <Clock className="h-16 w-16 text-muted-foreground mb-4" />
+            <Clock className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
             <h3 className="text-lg font-semibold mb-2">{noOrdersFilteredTitle}</h3>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground max-w-md">
               {noOrdersFilteredSubtitle}
             </p>
           </CardContent>
         </Card>
       ) : (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <Clock className="h-16 w-16 text-muted-foreground mb-4" />
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <ClipboardList className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
             <h3 className="text-lg font-semibold mb-2">{noOrdersOverallTitle}</h3>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground max-w-md">
               Orders will appear here when customers start placing them.
             </p>
           </CardContent>
@@ -1029,36 +1164,48 @@ const handlePrintKot = () => {
 
           {printTargetOrder && (
             <div className="space-y-4">
-              <div className="rounded-md border bg-muted/30 p-4 text-sm">
-                <div className="font-semibold">Order #{printTargetOrder.id}</div>
-                <div className="mt-2 grid gap-1 text-muted-foreground">
-                  <span>Total Amount: <span className="font-medium text-primary">₹{printTargetOrder.totalAmount}</span></span>
-                  <span>Customer: {printTargetOrder.customerName || "Guest"}</span>
-                  <span>Table: {printTargetOrder.tableId ?? "N/A"}</span>
+              <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
+                <div className="font-semibold text-base flex items-center gap-2">
+                  <Printer className="h-4 w-4" />
+                  Order #{printTargetOrder.id}
+                </div>
+                <div className="grid gap-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Total Amount:</span>
+                    <span className="font-bold text-primary text-base">{formatINR(printTargetOrder.totalAmount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Customer:</span>
+                    <span className="font-medium">{printTargetOrder.customerName || "Guest"}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Table:</span>
+                    <span className="font-medium">{printTargetOrder.tableId ?? "N/A"}</span>
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="bill-format">Print Format</Label>
+              <div className="space-y-3">
+                <Label htmlFor="bill-format" className="text-base font-semibold">Print Format</Label>
                 <RadioGroup
                   id="bill-format"
                   value={billFormat}
                   onValueChange={(value) => setBillFormat(value as "thermal" | "a4")}
                   className="grid gap-3"
                 >
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="thermal" id="bill-format-thermal" />
-                    <Label htmlFor="bill-format-thermal" className="flex flex-col">
-                      <span className="font-medium">Thermal Receipt</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="thermal" id="bill-format-thermal" className="mt-1" />
+                    <Label htmlFor="bill-format-thermal" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">Thermal Receipt</span>
                       <span className="text-sm text-muted-foreground">
                         Compact ticket for 58mm/80mm printers.
                       </span>
                     </Label>
                   </div>
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="a4" id="bill-format-a4" />
-                    <Label htmlFor="bill-format-a4" className="flex flex-col">
-                      <span className="font-medium">A4 Invoice</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="a4" id="bill-format-a4" className="mt-1" />
+                    <Label htmlFor="bill-format-a4" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">A4 Invoice</span>
                       <span className="text-sm text-muted-foreground">
                         Detailed invoice with payment information.
                       </span>
@@ -1067,36 +1214,42 @@ const handlePrintKot = () => {
                 </RadioGroup>
               </div>
 
-              {billFormat === "a4" && (
-              <div className="space-y-2">
-                <Label htmlFor="payment-type">Payment Type</Label>
+              <div className="space-y-3">
+                <Label htmlFor="payment-type" className="text-base font-semibold">
+                  Payment Type
+                  {billFormat === "a4" && <span className="text-destructive ml-1">*</span>}
+                </Label>
                 <RadioGroup
                   id="payment-type"
                   value={paymentType ?? undefined}
                   onValueChange={(value) => setPaymentType(value as PaymentType)}
                   className="grid gap-3"
                 >
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="cash" id="payment-cash" />
-                    <Label htmlFor="payment-cash" className="flex flex-col">
-                      <span className="font-medium">Cash Payment</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="cash" id="payment-cash" className="mt-1" />
+                    <Label htmlFor="payment-cash" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">Cash Payment</span>
                       <span className="text-sm text-muted-foreground">
                         Customer paid the bill using cash.
                       </span>
                     </Label>
                   </div>
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="upi" id="payment-upi" />
-                    <Label htmlFor="payment-upi" className="flex flex-col">
-                      <span className="font-medium">UPI Payment</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="upi" id="payment-upi" className="mt-1" />
+                    <Label htmlFor="payment-upi" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">UPI Payment</span>
                       <span className="text-sm text-muted-foreground">
                         Customer paid the bill through a UPI transaction.
                       </span>
                     </Label>
                   </div>
                 </RadioGroup>
+                {billFormat === "thermal" && (
+                  <p className="text-xs text-muted-foreground">
+                    Payment type is optional for thermal receipts.
+                  </p>
+                )}
               </div>
-              )}
             </div>
           )}
 
@@ -1106,7 +1259,11 @@ const handlePrintKot = () => {
             </Button>
             <Button
               onClick={handlePrintBill}
-              disabled={!printTargetOrder || (billFormat === "a4" && !paymentType)}
+              disabled={
+                !printTargetOrder ||
+                (billFormat === "a4" && !paymentType) ||
+                completeOrderMutation.isPending
+              }
             >
               <Printer className="mr-2 h-4 w-4" />
               Print Bill
@@ -1126,38 +1283,50 @@ const handlePrintKot = () => {
 
           {kotTargetOrder && (
             <div className="space-y-4">
-              <div className="rounded-md border bg-muted/30 p-4 text-sm">
-                <div className="font-semibold">Order #{kotTargetOrder.id}</div>
-                <div className="mt-2 grid gap-1 text-muted-foreground">
-                  <span>Table: {kotTargetOrder.tableId ?? "N/A"}</span>
-                  <span>Items: {parseOrderItems(kotTargetOrder).length}</span>
+              <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
+                <div className="font-semibold text-base flex items-center gap-2">
+                  <ChefHat className="h-4 w-4" />
+                  Order #{kotTargetOrder.id}
+                </div>
+                <div className="grid gap-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Table:</span>
+                    <span className="font-medium">{kotTargetOrder.tableId ?? "N/A"}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Items:</span>
+                    <span className="font-medium">{parseOrderItems(kotTargetOrder).length}</span>
+                  </div>
                   {kotTargetOrder.kotTicket?.ticketNumber && (
-                    <span>KOT #: {kotTargetOrder.kotTicket.ticketNumber}</span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">KOT #:</span>
+                      <span className="font-medium">{kotTargetOrder.kotTicket.ticketNumber}</span>
+                    </div>
                   )}
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="kot-format">Print Format</Label>
+              <div className="space-y-3">
+                <Label htmlFor="kot-format" className="text-base font-semibold">Print Format</Label>
                 <RadioGroup
                   id="kot-format"
                   value={kotFormat}
                   onValueChange={(value) => setKotFormat(value as "thermal" | "a4")}
                   className="grid gap-3"
                 >
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="thermal" id="kot-format-thermal" />
-                    <Label htmlFor="kot-format-thermal" className="flex flex-col">
-                      <span className="font-medium">Thermal Ticket</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="thermal" id="kot-format-thermal" className="mt-1" />
+                    <Label htmlFor="kot-format-thermal" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">Thermal Ticket</span>
                       <span className="text-sm text-muted-foreground">
                         Print on a thermal kitchen printer.
                       </span>
                     </Label>
                   </div>
-                  <div className="flex items-center space-x-3 rounded-md border p-3">
-                    <RadioGroupItem value="a4" id="kot-format-a4" />
-                    <Label htmlFor="kot-format-a4" className="flex flex-col">
-                      <span className="font-medium">A4 Ticket</span>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="a4" id="kot-format-a4" className="mt-1" />
+                    <Label htmlFor="kot-format-a4" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">A4 Ticket</span>
                       <span className="text-sm text-muted-foreground">
                         Full-page ticket for larger printers.
                       </span>
@@ -1182,3 +1351,4 @@ const handlePrintKot = () => {
     </div>
   );
 }
+

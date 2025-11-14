@@ -52,7 +52,7 @@ import { eq, and, desc, inArray, ne, sql, gte, lte } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { eachDayOfInterval, format as formatDate, subDays } from "date-fns";
 
-const ACTIVE_TABLE_LOCK_STATUSES = ["pending", "accepted", "preparing", "ready"] as const;
+const ACTIVE_TABLE_LOCK_STATUSES = ["pending", "accepted", "preparing", "ready", "delivered"] as const;
 
 export type AppUserWithStats = AppUser & { orderCount: number };
 
@@ -96,11 +96,18 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<UpsertUser>): Promise<User>;
+  getAllSystemUsers(filters?: {
+    role?: string;
+    isActive?: boolean;
+    isVerified?: boolean;
+    search?: string;
+  }): Promise<User[]>;
   
   // Vendor operations
   createVendor(vendor: InsertVendor): Promise<Vendor>;
   getVendor(id: number): Promise<Vendor | undefined>;
   getVendorByUserId(userId: string): Promise<Vendor | undefined>;
+  getVendorByOwnerId(ownerId: string): Promise<Vendor | undefined>;
   getAllVendors(): Promise<Vendor[]>;
   getPendingVendors(): Promise<Vendor[]>;
   updateVendorStatus(id: number, status: string, rejectionReason?: string, approvedBy?: string): Promise<Vendor>;
@@ -475,6 +482,55 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getAllSystemUsers(filters?: {
+    role?: string;
+    isActive?: boolean;
+    isVerified?: boolean;
+    search?: string;
+  }): Promise<User[]> {
+    let query = db.select().from(users);
+
+    const conditions: ReturnType<typeof eq>[] = [];
+
+    if (filters?.role) {
+      conditions.push(eq(users.role, filters.role));
+    }
+
+    if (filters?.isActive !== undefined) {
+      conditions.push(eq(users.isActive, filters.isActive));
+    }
+
+    if (filters?.isVerified !== undefined) {
+      conditions.push(eq(users.isVerified, filters.isVerified));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    const allUsers = await query.orderBy(desc(users.createdAt));
+
+    // Apply search filter in memory for text search across multiple fields
+    if (filters?.search) {
+      const searchLower = filters.search.toLowerCase().trim();
+      return allUsers.filter((user) => {
+        const searchableFields = [
+          user.id,
+          user.email,
+          user.fullName,
+          user.phoneNumber,
+          user.role,
+        ].filter(Boolean);
+
+        return searchableFields.some((field) =>
+          String(field).toLowerCase().includes(searchLower)
+        );
+      });
+    }
+
+    return allUsers;
+  }
+
   // Vendor operations
   async createVendor(vendor: InsertVendor): Promise<Vendor> {
     const [newVendor] = await db
@@ -548,6 +604,16 @@ export class DatabaseStorage implements IStorage {
     }
 
     return vendorsForUser[0];
+  }
+
+  async getVendorByOwnerId(ownerId: string): Promise<Vendor | undefined> {
+    const vendor = await db
+      .select()
+      .from(vendors)
+      .where(and(eq(vendors.ownerId, ownerId), ne(vendors.status, "suspended")))
+      .limit(1);
+    
+    return vendor[0];
   }
 
   async syncDuplicateVendors(
@@ -753,7 +819,7 @@ export class DatabaseStorage implements IStorage {
 
         // Filter to only active orders (not delivered or cancelled)
         const activeOrders = currentOrders.filter(
-          (order) => !['delivered', 'cancelled'].includes(order.status)
+          (order) => !['delivered', 'completed', 'cancelled'].includes(order.status)
         );
 
         return {
@@ -1526,16 +1592,44 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getAppUsersWithStats(search?: string): Promise<AppUserWithStats[]> {
-    const allUsers = await db.select().from(appUsers).orderBy(desc(appUsers.createdAt));
+  async getAppUsersWithStats(filters?: {
+    search?: string;
+    isPhoneVerified?: boolean;
+    city?: string;
+    state?: string;
+  }): Promise<AppUserWithStats[]> {
+    let query = db.select().from(appUsers);
+    const conditions: ReturnType<typeof eq>[] = [];
 
-    const normalizedSearch = search?.trim().toLowerCase();
+    if (filters?.isPhoneVerified !== undefined) {
+      conditions.push(eq(appUsers.isPhoneVerified, filters.isPhoneVerified));
+    }
+
+    if (filters?.city) {
+      conditions.push(eq(appUsers.city, filters.city));
+    }
+
+    if (filters?.state) {
+      conditions.push(eq(appUsers.state, filters.state));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    const allUsers = await query.orderBy(desc(appUsers.createdAt));
+
+    const normalizedSearch = filters?.search?.trim().toLowerCase();
     const filteredUsers =
       normalizedSearch && normalizedSearch.length > 0
         ? allUsers.filter((user) => {
             const nameMatch = user.name?.toLowerCase().includes(normalizedSearch);
             const phoneMatch = user.phone?.toLowerCase().includes(normalizedSearch);
-            return Boolean(nameMatch || phoneMatch);
+            const emailMatch = user.email?.toLowerCase().includes(normalizedSearch);
+            const cityMatch = user.city?.toLowerCase().includes(normalizedSearch);
+            const stateMatch = user.state?.toLowerCase().includes(normalizedSearch);
+            const idMatch = user.id.toString().includes(normalizedSearch);
+            return Boolean(nameMatch || phoneMatch || emailMatch || cityMatch || stateMatch || idMatch);
           })
         : allUsers;
 

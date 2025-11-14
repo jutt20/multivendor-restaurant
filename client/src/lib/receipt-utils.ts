@@ -6,6 +6,8 @@ type OrderWithVendorDetails = Order & {
     address?: string | null;
     phone?: string | null;
     email?: string | null;
+    paymentQrCodeUrl?: string | null;
+    gstin?: string | null;
   } | null;
 };
 
@@ -28,10 +30,12 @@ interface ReceiptData {
   restaurantName?: string;
   restaurantAddress?: string;
   restaurantPhone?: string;
+  paymentQrCodeUrl?: string | null;
   paymentType?: PaymentType;
   items?: ReceiptItem[];
   title?: string;
   ticketNumber?: string;
+  hidePricing?: boolean;
 }
 
 /** Currency formatter for INR */
@@ -105,13 +109,23 @@ const computeReceiptTotals = (
     .map(([rate, amount]) => ({
       rate,
       amount: roundCurrency(amount),
+      cgstRate: roundCurrency(rate / 2), // 50% of GST rate
+      cgstAmount: roundCurrency(amount / 2), // 50% of GST amount
+      sgstRate: roundCurrency(rate / 2), // 50% of GST rate
+      sgstAmount: roundCurrency(amount / 2), // 50% of GST amount
     }))
     .sort((a, b) => a.rate - b.rate);
+
+  // Also calculate CGST and SGST for included GST
+  const cgstIncluded = roundCurrency(summary.gstIncluded / 2);
+  const sgstIncluded = roundCurrency(summary.gstIncluded / 2);
 
   return {
     subtotal: roundCurrency(summary.subtotal),
     totalTax: roundCurrency(summary.totalTax),
     gstIncluded: roundCurrency(summary.gstIncluded),
+    cgstIncluded,
+    sgstIncluded,
     gstSeparate: roundCurrency(summary.gstSeparate),
     computedTotal,
     finalTotal,
@@ -145,40 +159,78 @@ export function generateThermalReceipt(data: ReceiptData): string {
     restaurantName = order.vendorDetails?.name || 'QuickBite QR',
     restaurantAddress = order.vendorDetails?.address || '',
     restaurantPhone = order.vendorDetails?.phone || '',
+    paymentQrCodeUrl = order.vendorDetails?.paymentQrCodeUrl ?? null,
+    paymentType,
     items = [],
     title,
     ticketNumber,
+    hidePricing = false,
   } = data;
 
-  const totals = computeReceiptTotals(items, order.totalAmount);
-  const gstBreakdownHtml =
-    totals.gstBreakdown.length > 0
-      ? totals.gstBreakdown
-          .map(
-            (entry) => `
+  const gstin = order.vendorDetails?.gstin || null;
+  const showPricing = !hidePricing;
+  const paymentLabel = paymentType ? paymentTypeLabels[paymentType] : null;
+
+  let totalsSection = "";
+  if (showPricing) {
+    const totals = computeReceiptTotals(items, order.totalAmount);
+    
+    // Generate CGST and SGST breakdown for separate GST items
+    const cgstSgstBreakdownHtml =
+      totals.gstBreakdown.length > 0
+        ? totals.gstBreakdown
+            .map(
+              (entry) => `
       <div class="total-row">
-        <span>GST @ ${entry.rate}%</span>
-        <span>${formatINR(entry.amount)}</span>
+        <span>CGST @ ${entry.cgstRate.toFixed(2)}%</span>
+        <span>${formatINR(entry.cgstAmount)}</span>
+      </div>
+      <div class="total-row">
+        <span>SGST @ ${entry.sgstRate.toFixed(2)}%</span>
+        <span>${formatINR(entry.sgstAmount)}</span>
       </div>`,
-          )
-          .join("")
-      : "";
-  const gstIncludedRow =
-    totals.gstIncluded > 0
-      ? `
+            )
+            .join("")
+        : "";
+    
+    // Generate CGST and SGST for included GST
+    const cgstSgstIncludedHtml =
+      totals.gstIncluded > 0
+        ? `
       <div class="total-row">
-        <span>GST (included)</span>
-        <span>${formatINR(totals.gstIncluded)}</span>
+        <span>CGST (included)</span>
+        <span>${formatINR(totals.cgstIncluded)}</span>
+      </div>
+      <div class="total-row">
+        <span>SGST (included)</span>
+        <span>${formatINR(totals.sgstIncluded)}</span>
       </div>`
-      : "";
-  const roundOffRow =
-    Math.abs(totals.roundOff) >= 0.01
-      ? `
+        : "";
+    
+    const roundOffRow =
+      Math.abs(totals.roundOff) >= 0.01
+        ? `
       <div class="total-row">
         <span>Round Off</span>
         <span>${formatINR(totals.roundOff)}</span>
       </div>`
-      : "";
+        : "";
+
+    totalsSection = `
+    <div class="totals">
+      <div class="total-row">
+        <span>Subtotal</span>
+        <span>${formatINR(totals.subtotal)}</span>
+      </div>
+      ${cgstSgstBreakdownHtml}
+      ${cgstSgstIncludedHtml}
+      ${roundOffRow}
+      <div class="total-row">
+        <span>TOTAL:</span>
+        <span>${formatINR(totals.finalTotal)}</span>
+      </div>
+    </div>`;
+  }
 
   return `
 <!DOCTYPE html>
@@ -207,6 +259,10 @@ export function generateThermalReceipt(data: ReceiptData): string {
     .item-price { width: 60px; text-align: right; }
     .totals { margin: 10px 0; border-top: 1px dashed #000; padding-top: 5px; }
     .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; }
+    .payment-section { margin: 12px 0; text-align: center; }
+    .payment-heading { font-size: 12px; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; }
+    .payment-qr { display: inline-flex; padding: 4px; border: 1px dashed #000; border-radius: 4px; }
+    .payment-qr img { width: 120px; height: 120px; object-fit: contain; }
     .footer { text-align: center; margin-top: 10px; font-size: 10px; border-top: 1px dashed #000; padding-top: 5px; }
     .thank-you { font-weight: bold; margin: 3px 0; }
   </style>
@@ -216,6 +272,7 @@ export function generateThermalReceipt(data: ReceiptData): string {
     <div class="header">
       <div class="restaurant-name">${restaurantName}</div>
       ${restaurantAddress ? `<div class="restaurant-address">${restaurantAddress}</div>` : ''}
+      ${gstin ? `<div class="restaurant-phone">GST: ${gstin}</div>` : ''}
       ${restaurantPhone ? `<div class="restaurant-phone">Tel: ${restaurantPhone}</div>` : ''}
     </div>
 
@@ -229,6 +286,7 @@ export function generateThermalReceipt(data: ReceiptData): string {
       <div class="order-info-row"><span>Customer:</span><span>${order.customerName || 'Guest'}</span></div>
       <div class="order-info-row"><span>Phone:</span><span>${order.customerPhone || '-'}</span></div>
       <div class="order-info-row"><span>Status:</span><span><strong>${order.status.toUpperCase()}</strong></span></div>
+      ${paymentLabel ? `<div class="order-info-row"><span>Payment:</span><span><strong>${paymentLabel}</strong></span></div>` : ''}
     </div>
 
     ${items.length > 0 ? `
@@ -236,7 +294,7 @@ export function generateThermalReceipt(data: ReceiptData): string {
       <div class="item-row" style="font-weight:bold; border-bottom:1px solid #000; padding-bottom:3px; margin-bottom:3px;">
         <div class="item-name">Item</div>
         <div class="item-qty">Qty</div>
-        <div class="item-price">Price</div>
+        ${showPricing ? `<div class="item-price">Price</div>` : ""}
       </div>
       ${items.map(item => {
         const rowAmount =
@@ -245,28 +303,28 @@ export function generateThermalReceipt(data: ReceiptData): string {
       <div class="item-row">
         <div class="item-name">${item.name}</div>
         <div class="item-qty">${item.quantity}</div>
-        <div class="item-price">${formatINR(rowAmount)}</div>
+        ${showPricing ? `<div class="item-price">${formatINR(rowAmount)}</div>` : ""}
       </div>`;
       }).join('')}
     </div>` : ''}
 
-    <div class="totals">
-      <div class="total-row">
-        <span>Subtotal</span>
-        <span>${formatINR(totals.subtotal)}</span>
+    ${totalsSection}
+
+    ${
+      paymentQrCodeUrl
+        ? `
+    <div class="payment-section">
+      <div class="payment-heading">Scan to Pay</div>
+      <div class="payment-qr">
+        <img src="${paymentQrCodeUrl}" alt="Scan to pay" />
       </div>
-      ${gstBreakdownHtml}
-      ${gstIncludedRow}
-      ${roundOffRow}
-      <div class="total-row">
-        <span>TOTAL:</span>
-        <span>${formatINR(totals.finalTotal)}</span>
-      </div>
-    </div>
+    </div>`
+        : ""
+    }
 
     <div class="footer">
       <div class="thank-you">Thank You!</div>
-      <div>Powered by QuickBite QR App</div>
+      <div>Hukam Mere Aaka</div>
       <div style="margin-top:5px;">===========================</div>
     </div>
   </div>
@@ -285,10 +343,12 @@ export function generateA4Invoice(data: InvoiceData): string {
     restaurantName = order.vendorDetails?.name || "QuickBite QR",
     restaurantAddress = order.vendorDetails?.address || "",
     restaurantPhone = order.vendorDetails?.phone || "",
+    paymentQrCodeUrl = data.paymentQrCodeUrl ?? order.vendorDetails?.paymentQrCodeUrl ?? null,
     paymentType,
     items = [],
   } = data;
 
+  const gstin = order.vendorDetails?.gstin || null;
   const createdAt = order.createdAt ? new Date(order.createdAt) : new Date();
   const customerName = order.customerName || "Guest";
   const customerPhone = order.customerPhone || "-";
@@ -431,6 +491,32 @@ export function generateA4Invoice(data: InvoiceData): string {
       padding-top: 8px;
       font-weight: 500;
     }
+    .payment-section {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 24px;
+    }
+    .payment-card {
+      border: 1px dashed #cbd5f5;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background-color: #f9fafb;
+      text-align: center;
+      max-width: 220px;
+    }
+    .payment-card h4 {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      color: #1f2937;
+    }
+    .payment-card img {
+      width: 160px;
+      height: 160px;
+      object-fit: contain;
+    }
   </style>
 </head>
 <body>
@@ -441,6 +527,7 @@ export function generateA4Invoice(data: InvoiceData): string {
         <div class="business-details">
           <div><strong>${restaurantName}</strong></div>
           ${restaurantAddress ? `<div>${restaurantAddress}</div>` : ""}
+          ${gstin ? `<div>GST: ${gstin}</div>` : ""}
           ${restaurantPhone ? `<div>Phone: ${restaurantPhone}</div>` : ""}
           ${order.vendorDetails?.email ? `<div>Email: ${order.vendorDetails.email}</div>` : ""}
         </div>
@@ -452,6 +539,18 @@ export function generateA4Invoice(data: InvoiceData): string {
         <div><span class="label">Payment:</span>${paymentLabel}</div>
       </div>
     </div>
+
+    ${
+      paymentQrCodeUrl
+        ? `
+    <div class="payment-section">
+      <div class="payment-card">
+        <h4>Scan to Pay</h4>
+        <img src="${paymentQrCodeUrl}" alt="Scan to pay" />
+      </div>
+    </div>`
+        : ""
+    }
 
     <div class="section-heading">Bill To</div>
     <div class="details-grid">
@@ -512,8 +611,12 @@ export function generateA4Invoice(data: InvoiceData): string {
                   .map(
                     (entry) => `
           <tr>
-            <td style="text-align: right;">GST @ ${entry.rate}%</td>
-            <td style="text-align: right;">${formatINR(entry.amount)}</td>
+            <td style="text-align: right;">CGST @ ${entry.cgstRate.toFixed(2)}%</td>
+            <td style="text-align: right;">${formatINR(entry.cgstAmount)}</td>
+          </tr>
+          <tr>
+            <td style="text-align: right;">SGST @ ${entry.sgstRate.toFixed(2)}%</td>
+            <td style="text-align: right;">${formatINR(entry.sgstAmount)}</td>
           </tr>`,
                   )
                   .join("")
@@ -523,8 +626,12 @@ export function generateA4Invoice(data: InvoiceData): string {
             totals.gstIncluded > 0
               ? `
           <tr>
-            <td style="text-align: right;">GST (included in prices)</td>
-            <td style="text-align: right;">${formatINR(totals.gstIncluded)}</td>
+            <td style="text-align: right;">CGST (included in prices)</td>
+            <td style="text-align: right;">${formatINR(totals.cgstIncluded)}</td>
+          </tr>
+          <tr>
+            <td style="text-align: right;">SGST (included in prices)</td>
+            <td style="text-align: right;">${formatINR(totals.sgstIncluded)}</td>
           </tr>`
               : ""
           }
@@ -568,7 +675,7 @@ export function generateA4Invoice(data: InvoiceData): string {
     </div>
 
     <div class="footer">
-      Thank you for dining with us! | Powered by QuickBite QR
+      Thank you for dining with us! | Hukam Mere Aaka
     </div>
   </div>
 </body>
@@ -787,11 +894,7 @@ export function generateA4Kot(data: ReceiptData): string {
 }
 
 const itemDescription = (item: ReceiptItem): string => {
-  const descriptionParts: string[] = [];
-  if (item.lineTotal) {
-    descriptionParts.push(`Total: ${formatINR(item.lineTotal)}`);
-  }
-  return descriptionParts.join(" ");
+  return "";
 };
 
 export function printA4Kot(data: ReceiptData): void {

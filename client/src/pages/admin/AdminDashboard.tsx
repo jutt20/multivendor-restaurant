@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { DateRange } from "react-day-picker";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, parseISO, subDays } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Store, Users, ShoppingCart, TrendingUp } from "lucide-react";
+import { Search, Store, Users, ShoppingCart, TrendingUp } from "lucide-react";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -19,6 +20,17 @@ import type { Vendor, AdminSalesSummary, Order } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+} from "recharts";
 
 const formatINR = (value: number | string | null | undefined) => {
   if (value === null || value === undefined || value === "") {
@@ -70,8 +82,16 @@ const formatOrderTimestamp = (value: string | Date | null | undefined): string =
   }
 };
 
+const parseCurrencyToNumber = (value: string | number | null | undefined): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return value;
+  const numeric = Number.parseFloat(String(value).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 export default function AdminDashboard() {
   const { toast } = useToast();
+  const [searchTerm, setSearchTerm] = useState("");
   // Poll for real-time stats updates
   const { data: stats, isLoading: loadingStats } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
@@ -211,6 +231,95 @@ export default function AdminDashboard() {
       ? 0
       : Math.min(totalRecentOrders, firstRecentOrderIndex + recentOrders.length - 1);
 
+  const searchQuery = searchTerm.trim().toLowerCase();
+  const isSearching = searchQuery.length > 0;
+
+  const filteredRecentOrders = useMemo(() => {
+    if (!isSearching) return recentOrders;
+    return recentOrders.filter((order) => {
+      const values: Array<unknown> = [
+        order.id,
+        order.vendorId,
+        order.vendorName,
+        order.vendorPhone,
+        order.tableId,
+        order.tableNumber,
+        order.customerId,
+        order.customerName,
+        order.customerPhone,
+        order.status,
+        order.totalAmount,
+      ];
+
+      if (
+        values.some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(searchQuery),
+        )
+      ) {
+        return true;
+      }
+
+      return formatOrderTimestamp(order.createdAt).toLowerCase().includes(searchQuery);
+    });
+  }, [recentOrders, isSearching, searchQuery]);
+
+  const filteredDailySales = useMemo(() => {
+    if (!salesSummary?.daily) return [];
+    if (!isSearching) return salesSummary.daily;
+    return salesSummary.daily.filter((day) => {
+      const formattedDate = format(parseISO(day.date), "LLL dd, yyyy");
+      const values: Array<unknown> = [formattedDate, day.totalOrders, day.totalRevenue];
+      return values.some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(searchQuery),
+      );
+    });
+  }, [salesSummary, isSearching, searchQuery]);
+
+  const filteredVendorBreakdown = useMemo(() => {
+    if (!salesSummary?.vendorBreakdown) return [];
+    if (!isSearching) return salesSummary.vendorBreakdown;
+    return salesSummary.vendorBreakdown.filter((vendor) => {
+      const values: Array<unknown> = [
+        vendor.vendorId,
+        vendor.vendorName,
+        vendor.totalOrders,
+        vendor.totalRevenue,
+      ];
+      return values.some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(searchQuery),
+      );
+    });
+  }, [salesSummary, isSearching, searchQuery]);
+
+  const dailyChartData = useMemo(() => {
+    if (!salesSummary?.daily) return [];
+    return salesSummary.daily.map((day) => ({
+      dateLabel: format(parseISO(day.date), "MMM dd"),
+      orders: day.totalOrders,
+      revenue: parseCurrencyToNumber(day.totalRevenue),
+    }));
+  }, [salesSummary]);
+
+  const topVendorChartData = useMemo(() => {
+    if (!salesSummary?.vendorBreakdown) return [];
+    return salesSummary.vendorBreakdown
+      .map((vendor) => ({
+        name: vendor.vendorName,
+        revenue: parseCurrencyToNumber(vendor.totalRevenue),
+        orders: vendor.totalOrders,
+      }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 6);
+  }, [salesSummary]);
+
+  const hasDailyChartData = dailyChartData.length > 0;
+
   const clearSessionsMutation = useMutation({
     mutationFn: async () => {
       const response = await apiRequest("DELETE", "/api/admin/sessions");
@@ -276,6 +385,23 @@ export default function AdminDashboard() {
         </p>
       </div>
 
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search across dashboard tables"
+            className="pl-9"
+          />
+        </div>
+        {searchTerm.trim().length > 0 && (
+          <span className="text-sm text-muted-foreground">
+            Showing matches across recent orders, sales, and vendor tables
+          </span>
+        )}
+      </div>
+
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => (
           <Card key={stat.title} className="hover-elevate">
@@ -298,6 +424,85 @@ export default function AdminDashboard() {
             </CardContent>
           </Card>
         ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Revenue Trend</CardTitle>
+            <CardDescription>Platform-wide daily revenue for the selected range.</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[280px]">
+            {loadingSales && !hasDailyChartData ? (
+              <Skeleton className="h-[240px] w-full" />
+            ) : hasDailyChartData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={dailyChartData} margin={{ top: 10, left: -24, right: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="dateLabel" tickLine={false} axisLine={false} />
+                  <YAxis
+                    tickFormatter={(value) => formatINR(value).replace(".00", "")}
+                    tickLine={false}
+                    axisLine={false}
+                    width={90}
+                  />
+                  <RechartsTooltip
+                    labelFormatter={(label) => label}
+                    formatter={(value) => [formatINR(value as number), "Revenue"]}
+                  />
+                  <Line type="monotone" dataKey="revenue" stroke="#7c3aed" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No revenue data for this range.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Top Vendors by Revenue</CardTitle>
+            <CardDescription>Leading contributors in the selected period.</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[280px]">
+            {loadingSales && topVendorChartData.length === 0 ? (
+              <Skeleton className="h-[240px] w-full" />
+            ) : topVendorChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={topVendorChartData}
+                  layout="vertical"
+                  margin={{ top: 10, left: 0, right: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis
+                    type="number"
+                    tickFormatter={(value) => formatINR(value).replace(".00", "")}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={140}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <RechartsTooltip
+                    formatter={(value) => [formatINR(value as number), "Revenue"]}
+                    labelFormatter={(value) => value as string}
+                  />
+                  <Bar dataKey="revenue" fill="#10b981" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No vendor revenue data available.
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
@@ -338,9 +543,11 @@ export default function AdminDashboard() {
                 <Skeleton key={i} className="h-16 w-full" />
               ))}
             </div>
-          ) : recentOrders.length === 0 ? (
+          ) : filteredRecentOrders.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              No recent orders yet. New orders will appear here automatically.
+              {isSearching
+                ? "No recent orders match your search."
+                : "No recent orders yet. New orders will appear here automatically."}
             </div>
           ) : (
             <>
@@ -358,7 +565,7 @@ export default function AdminDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {recentOrders.map((order) => {
+                    {filteredRecentOrders.map((order) => {
                       const vendorLabel =
                         order.vendorName ?? `Vendor #${order.vendorId}`;
                       const tableRef = order.tableNumber ?? order.tableId;
@@ -385,14 +592,16 @@ export default function AdminDashboard() {
               </div>
               <div className="mt-4 flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                 <p className="text-sm text-muted-foreground">
-                  Showing {firstRecentOrderIndex}-{lastRecentOrderIndex} of {totalRecentOrders} orders
+                  {isSearching
+                    ? `Showing ${filteredRecentOrders.length} matching order${filteredRecentOrders.length === 1 ? "" : "s"}`
+                    : `Showing ${firstRecentOrderIndex}-${lastRecentOrderIndex} of ${totalRecentOrders} orders`}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => setRecentOrdersPage((prev) => Math.max(1, prev - 1))}
-                    disabled={!hasPreviousRecentPage}
+                    disabled={!hasPreviousRecentPage || isSearching}
                   >
                     Previous
                   </Button>
@@ -403,7 +612,7 @@ export default function AdminDashboard() {
                     variant="outline"
                     size="sm"
                     onClick={() => setRecentOrdersPage((prev) => prev + 1)}
-                    disabled={!hasNextRecentPage}
+                    disabled={!hasNextRecentPage || isSearching}
                   >
                     Next
                   </Button>
@@ -501,19 +710,29 @@ export default function AdminDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {salesSummary.daily.map((day) => (
-                          <TableRow key={day.date}>
-                            <TableCell>
-                              {format(parseISO(day.date), "LLL dd, yyyy")}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {day.totalOrders}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {formatINR(day.totalRevenue)}
+                        {filteredDailySales.length > 0 ? (
+                          filteredDailySales.map((day) => (
+                            <TableRow key={day.date}>
+                              <TableCell>
+                                {format(parseISO(day.date), "LLL dd, yyyy")}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {day.totalOrders}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {formatINR(day.totalRevenue)}
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
+                              {isSearching
+                                ? "No daily sales match your search."
+                                : "No sales recorded for this range yet."}
                             </TableCell>
                           </TableRow>
-                        ))}
+                        )}
                       </TableBody>
                     </Table>
                   </div>
@@ -532,22 +751,24 @@ export default function AdminDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {salesSummary.vendorBreakdown.length > 0 ? (
-                          salesSummary.vendorBreakdown.slice(0, 10).map((vendor) => (
+                        {filteredVendorBreakdown.length > 0 ? (
+                          filteredVendorBreakdown.slice(0, 10).map((vendor) => (
                             <TableRow key={vendor.vendorId}>
                               <TableCell>{vendor.vendorName}</TableCell>
                               <TableCell className="text-right">
                                 {vendor.totalOrders}
                               </TableCell>
                               <TableCell className="text-right">
-                              {formatINR(vendor.totalRevenue)}
+                                {formatINR(vendor.totalRevenue)}
                               </TableCell>
                             </TableRow>
                           ))
                         ) : (
                           <TableRow>
                             <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
-                              No vendor sales in this range.
+                              {isSearching
+                                ? "No vendors match your search."
+                                : "No vendor sales in this range."}
                             </TableCell>
                           </TableRow>
                         )}
