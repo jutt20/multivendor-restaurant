@@ -371,6 +371,100 @@ const buildManualOrderPayload = async (
   });
 };
 
+// Normalize mobile (delivery/pickup) order items with GST based on vendor menu categories
+const enrichOrderItemsWithGstForVendor = async (
+  vendorId: number,
+  rawItems: any[],
+) => {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    return { items: [], totalAmount: 0 };
+  }
+
+  const [menuItemsForVendor, categories] = await Promise.all([
+    storage.getMenuItems(vendorId),
+    storage.getMenuCategories(vendorId),
+  ]);
+
+  const menuMap = new Map(menuItemsForVendor.map((item) => [item.id, item]));
+  const categoryMap = new Map(categories.map((category) => [category.id, category]));
+
+  const normalizedItems = rawItems.map((item) => {
+    const quantityRaw = Number(item.quantity ?? 1);
+    const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? quantityRaw : 1;
+
+    const priceCandidates = [item.price, item.basePrice, item.unitPrice];
+    let baseUnitPrice = 0;
+    for (const candidate of priceCandidates) {
+      if (candidate === null || candidate === undefined) continue;
+      const numeric = Number.parseFloat(String(candidate));
+      if (Number.isFinite(numeric)) {
+        baseUnitPrice = numeric;
+        break;
+      }
+    }
+    baseUnitPrice = Number.isFinite(baseUnitPrice) ? roundCurrency(baseUnitPrice) : 0;
+
+    let baseSubtotal = roundCurrency(
+      Number.parseFloat(String(item.subtotal ?? "")) || baseUnitPrice * quantity,
+    );
+
+    const itemId = Number(
+      item.itemId ?? item.id ?? item.productId ?? item.menuItemId ?? 0,
+    );
+    const menuItem = menuMap.get(itemId);
+    const category = menuItem ? categoryMap.get(menuItem.categoryId) : undefined;
+
+    let gstRate = 0;
+    if (category?.gstRate != null) {
+      const raw = Number(category.gstRate);
+      if (Number.isFinite(raw) && raw > 0) {
+        gstRate = Number(raw.toFixed(2));
+      }
+    }
+    const gstMode: "include" | "exclude" =
+      category?.gstMode === "include" ? "include" : "exclude";
+
+    let gstAmount = 0;
+    let lineTotal = baseSubtotal;
+
+    if (gstRate > 0) {
+      if (gstMode === "include") {
+        // Price is GST-inclusive: baseSubtotal currently includes GST
+        lineTotal = baseSubtotal;
+        gstAmount = roundCurrency(lineTotal * (gstRate / (100 + gstRate)));
+        baseSubtotal = roundCurrency(lineTotal - gstAmount);
+      } else {
+        // Price is GST-exclusive
+        gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
+        lineTotal = roundCurrency(baseSubtotal + gstAmount);
+      }
+    }
+
+    return {
+      ...item,
+      itemId,
+      quantity,
+      price: baseUnitPrice,
+      subtotal: baseSubtotal,
+      gstRate,
+      gstMode,
+      gstAmount,
+      subtotalWithGst: lineTotal,
+      lineTotal,
+    };
+  });
+
+  const totalAmount = normalizedItems.reduce((sum, entry) => {
+    const value = Number(entry.lineTotal ?? entry.subtotal ?? 0);
+    return sum + (Number.isFinite(value) ? value : 0);
+  }, 0);
+
+  return {
+    items: normalizedItems,
+    totalAmount: roundCurrency(totalAmount),
+  };
+};
+
 const handleOrderPostCreation = async (orderId: number) => {
   const fullOrder = await storage.getOrder(orderId);
   if (!fullOrder) {
@@ -3997,11 +4091,20 @@ app.get(
         return res.status(400).json({ message: "Missing required fields" });
       }
 
+      const vendorId = Number(restaurant_id);
+      if (!Number.isFinite(vendorId) || vendorId <= 0) {
+        return res.status(400).json({ message: "Invalid restaurant_id" });
+      }
+
+      // Normalize items with GST based on vendor configuration
+      const { items: normalizedItems, totalAmount } =
+        await enrichOrderItemsWithGstForVendor(vendorId, items);
+
       const order = await storage.createDeliveryOrder({
         userId: user_id,
-        vendorId: restaurant_id,
-        items: JSON.stringify(items),
-        totalAmount: total_amount.toString(),
+        vendorId,
+        items: JSON.stringify(normalizedItems),
+        totalAmount: toCurrencyString(totalAmount),
         deliveryAddress: delivery_address,
         deliveryLatitude: delivery_latitude?.toString(),
         deliveryLongitude: delivery_longitude?.toString(),
@@ -4293,6 +4396,11 @@ app.get(
           isActive: category.isActive,
           createdAt: category.createdAt,
           updatedAt: category.updatedAt,
+          // GST details from category (used by client for correct pricing display)
+          gst: {
+            rate: category.gstRate != null ? Number(category.gstRate) : 0,
+            mode: category.gstMode === "include" ? "include" : "exclude",
+          },
           // Items with no subcategory (directly under category)
           items: itemsForCategory,
           // Subcategories containing items with subcategory
@@ -4538,8 +4646,13 @@ app.get(
         return res.status(400).json({ message: "Missing required fields" });
       }
 
+      const vendorId = Number(restaurant_id);
+      if (!Number.isFinite(vendorId) || vendorId <= 0) {
+        return res.status(400).json({ message: "Invalid restaurant_id" });
+      }
+
       // Validate vendor has pickup enabled
-      const vendor = await storage.getVendor(restaurant_id);
+      const vendor = await storage.getVendor(vendorId);
       if (!vendor) {
         return res.status(404).json({ message: "Restaurant not found" });
       }
@@ -4548,14 +4661,18 @@ app.get(
       }
 
       // Generate pickup reference (e.g., PICKUP-001)
-      const existingPickupOrders = await storage.getVendorPickupOrders(restaurant_id);
+      const existingPickupOrders = await storage.getVendorPickupOrders(vendorId);
       const pickupReference = `PICKUP-${String(existingPickupOrders.length + 1).padStart(3, '0')}`;
+
+      // Normalize items with GST based on vendor configuration
+      const { items: normalizedItems, totalAmount } =
+        await enrichOrderItemsWithGstForVendor(vendorId, items);
 
       const order = await storage.createPickupOrder({
         userId: user_id,
-        vendorId: restaurant_id,
-        items: JSON.stringify(items),
-        totalAmount: total_amount.toString(),
+        vendorId,
+        items: JSON.stringify(normalizedItems),
+        totalAmount: toCurrencyString(totalAmount),
         customerPhone: customer_phone || null,
         pickupReference: pickupReference,
         pickupTime: pickup_time ? new Date(pickup_time) : null,

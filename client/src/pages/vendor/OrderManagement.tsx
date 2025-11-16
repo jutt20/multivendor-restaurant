@@ -521,6 +521,22 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
               : lineTotal
             : unitPrice;
 
+        // Map addons (if any) for printing
+        let addons: { name: string; price?: number }[] | undefined;
+        if (Array.isArray(item.addons) && item.addons.length > 0) {
+          addons = item.addons.map((addon: any) => {
+            const priceValue =
+              addon.price !== undefined && addon.price !== null
+                ? Number.parseFloat(String(addon.price))
+                : undefined;
+            const price = Number.isFinite(priceValue) ? roundCurrency(priceValue as number) : undefined;
+            return {
+              name: String(addon.name ?? "Addon"),
+              price,
+            };
+          });
+        }
+
         return {
           name: item.name || "Item",
           quantity,
@@ -531,6 +547,8 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
           gstMode,
           gstAmount,
           lineTotal,
+          addons,
+          notes: typeof item.notes === "string" ? item.notes : null,
         };
       });
     },

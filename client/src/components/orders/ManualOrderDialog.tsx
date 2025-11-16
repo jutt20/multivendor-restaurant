@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,15 +15,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { MenuCategory, Order } from "@shared/schema";
+import type { MenuAddon, MenuCategory, Order } from "@shared/schema";
 import { Minus, Plus, Trash2 } from "lucide-react";
 
 type TableOption = {
   id: number;
   tableNumber?: number | null;
   label?: string | null;
+};
+
+type SelectedAddon = {
+  id: number;
+  name: string;
+  price: number;
+  quantity: number;
 };
 
 type MenuItemOption = {
@@ -27,6 +42,7 @@ type MenuItemOption = {
   gstRate?: number | string | null;
   gstMode?: "include" | "exclude" | null;
   isAvailable?: boolean | null;
+  addons?: MenuAddon[];
 };
 
 interface ManualOrderDialogProps {
@@ -46,8 +62,9 @@ interface ManualOrderDialogProps {
 type OrderLine = {
   itemId: number;
   name: string;
-  price: number;
+  basePrice: number;
   quantity: number;
+  addons: SelectedAddon[];
 };
 
 type EnrichedOrderLine = OrderLine & {
@@ -116,6 +133,9 @@ export function ManualOrderDialog({
   const [open, setOpen] = useState(false);
   const [selectedTableId, setSelectedTableId] = useState<string>("");
   const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const [selectedAddonQuantities, setSelectedAddonQuantities] = useState<
+    Record<number, number>
+  >({});
   const [quantity, setQuantity] = useState<number>(1);
   const [orderLines, setOrderLines] = useState<OrderLine[]>([]);
   const [customerName, setCustomerName] = useState("");
@@ -154,6 +174,11 @@ export function ManualOrderDialog({
     });
   }, [menuItems, categoriesById]);
 
+  const selectedMenuItem = useMemo(
+    () => enhancedMenuItems.find((item) => String(item.id) === selectedItemId),
+    [enhancedMenuItems, selectedItemId],
+  );
+
   const availableItems = useMemo(
     () => enhancedMenuItems.filter((item) => item.isAvailable !== false),
     [enhancedMenuItems],
@@ -173,13 +198,20 @@ export function ManualOrderDialog({
       const gstRate = normalizeGstRate(source?.gstRate);
       const gstMode: "include" | "exclude" =
         source?.gstMode === "include" ? "include" : "exclude";
-      const baseSubtotal = roundCurrency(line.price * line.quantity);
+      const addonsTotalPerUnit = line.addons.reduce((sum, addon) => {
+        const price = Number.isFinite(addon.price) ? addon.price : 0;
+        const qty = Number.isFinite(addon.quantity) ? addon.quantity : 1;
+        return sum + price * qty;
+      }, 0);
+      const unitPrice = line.basePrice + addonsTotalPerUnit;
+      const baseSubtotal = roundCurrency(unitPrice * line.quantity);
       const gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
       const lineTotal = roundCurrency(baseSubtotal + gstAmount);
       const unitPriceWithTax =
         line.quantity > 0 ? roundCurrency(lineTotal / line.quantity) : lineTotal;
       return {
         ...line,
+        price: unitPrice,
         baseSubtotal,
         gstAmount,
         gstRate,
@@ -233,6 +265,7 @@ export function ManualOrderDialog({
 
   const resetState = () => {
     setSelectedItemId("");
+    setSelectedAddonQuantities({});
     setQuantity(1);
     setOrderLines([]);
     setCustomerName("");
@@ -248,6 +281,36 @@ export function ManualOrderDialog({
     if (!nextOpen) {
       resetState();
     }
+  };
+
+  const handleToggleAddon = (addonId: number) => {
+    setSelectedAddonQuantities((current) => {
+      const next = { ...current };
+      if (next[addonId] && next[addonId] > 0) {
+        delete next[addonId];
+      } else {
+        next[addonId] = 1;
+      }
+      return next;
+    });
+  };
+
+  const handleAddonQuantityChange = (addonId: number, delta: number) => {
+    setSelectedAddonQuantities((current) => {
+      const existing = current[addonId] ?? 0;
+      const nextValue = existing + delta;
+      if (nextValue <= 0) {
+        const next = { ...current };
+        delete next[addonId];
+        return next;
+      }
+      return { ...current, [addonId]: nextValue };
+    });
+  };
+
+  const handleSelectItem = (value: string) => {
+    setSelectedItemId(value);
+    setSelectedAddonQuantities({});
   };
 
   const handleAddItem = () => {
@@ -271,8 +334,8 @@ export function ManualOrderDialog({
       return;
     }
 
-    const price = toNumber(item.price);
-    if (Number.isNaN(price)) {
+    const basePrice = toNumber(item.price);
+    if (Number.isNaN(basePrice)) {
       toast({
         title: "Invalid price",
         description: "Unable to determine the price for the selected item.",
@@ -280,6 +343,18 @@ export function ManualOrderDialog({
       });
       return;
     }
+
+    const availableAddons = (item.addons ?? []).map((addon) => ({
+      id: addon.id,
+      name: addon.name,
+      price: toNumber(addon.price as number | string),
+    }));
+    const selectedAddons: SelectedAddon[] = availableAddons
+      .filter((addon) => (selectedAddonQuantities[addon.id] ?? 0) > 0)
+      .map((addon) => ({
+        ...addon,
+        quantity: selectedAddonQuantities[addon.id] ?? 1,
+      }));
 
     if (quantity < 1) {
       toast({
@@ -291,10 +366,21 @@ export function ManualOrderDialog({
     }
 
     setOrderLines((current) => {
-      const existing = current.find((line) => line.itemId === item.id);
+      const hasSameAddons = (line: OrderLine) => {
+        const lineAddonIds = line.addons.map((addon) => addon.id).sort();
+        const selectedIdsSorted = selectedAddons.map((addon) => addon.id).sort();
+        return (
+          lineAddonIds.length === selectedIdsSorted.length &&
+          lineAddonIds.every((id, index) => id === selectedIdsSorted[index])
+        );
+      };
+
+      const existing = current.find(
+        (line) => line.itemId === item.id && hasSameAddons(line),
+      );
       if (existing) {
         return current.map((line) =>
-          line.itemId === item.id
+          line.itemId === item.id && hasSameAddons(line)
             ? { ...line, quantity: line.quantity + quantity }
             : line,
         );
@@ -304,13 +390,15 @@ export function ManualOrderDialog({
         {
           itemId: item.id,
           name: item.name,
-          price,
+          basePrice,
           quantity,
+          addons: selectedAddons,
         },
       ];
     });
 
     setSelectedItemId("");
+    setSelectedAddonQuantities({});
     setQuantity(1);
   };
 
@@ -344,15 +432,27 @@ export function ManualOrderDialog({
           const source = menuItemsById.get(line.itemId);
           const gstRate = normalizeGstRate(source?.gstRate);
           const gstMode = source?.gstMode === "include" ? "include" : "exclude";
+          const addonsTotalPerUnit = line.addons.reduce((sum, addon) => {
+            const price = Number.isFinite(addon.price) ? addon.price : 0;
+            const qty = Number.isFinite(addon.quantity) ? addon.quantity : 1;
+            return sum + price * qty;
+          }, 0);
+          const unitPrice = line.basePrice + addonsTotalPerUnit;
 
           return {
             itemId: line.itemId,
             name: line.name,
             quantity: line.quantity,
-            price: line.price,
-            subtotal: Number((line.price * line.quantity).toFixed(2)),
+            price: unitPrice,
+            subtotal: Number((unitPrice * line.quantity).toFixed(2)),
             gstRate,
             gstMode,
+            addons: line.addons.map((addon) => ({
+              id: addon.id,
+              name: addon.name,
+              price: addon.price,
+              quantity: addon.quantity,
+            })),
           };
         }),
         customerName: customerName.trim() || undefined,
@@ -450,7 +550,7 @@ export function ManualOrderDialog({
                     <div className="grid gap-3 md:grid-cols-[2fr,1fr,auto]">
                       <div className="space-y-2">
                         <Label>Add Item</Label>
-                        <Select value={selectedItemId} onValueChange={setSelectedItemId}>
+                        <Select value={selectedItemId} onValueChange={handleSelectItem}>
                           <SelectTrigger>
                             <SelectValue placeholder="Choose menu item" />
                           </SelectTrigger>
@@ -463,6 +563,71 @@ export function ManualOrderDialog({
                           </SelectContent>
                         </Select>
                       </div>
+
+                      {selectedMenuItem && (selectedMenuItem.addons?.length ?? 0) > 0 && (
+                        <div className="space-y-2 md:col-span-3">
+                          <Label>Addons / Options</Label>
+                          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                            {selectedMenuItem.addons!.map((addon) => (
+                              <div
+                                key={addon.id}
+                                className="flex items-center gap-2 rounded-md border p-2 text-sm"
+                              >
+                                <Checkbox
+                                  checked={selectedAddonQuantities[addon.id] !== undefined}
+                                  onCheckedChange={() => handleToggleAddon(addon.id)}
+                                />
+                                <div className="flex-1">
+                                  <div className="font-medium">{addon.name}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {formatCurrency(
+                                      toNumber(addon.price as number | string) || 0,
+                                    )}{" "}
+                                    each
+                                  </div>
+                                </div>
+                                {selectedAddonQuantities[addon.id] !== undefined && (
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      onClick={() => handleAddonQuantityChange(addon.id, -1)}
+                                    >
+                                      <Minus className="h-3 w-3" />
+                                    </Button>
+                                    <Input
+                                      type="number"
+                                      min={1}
+                                      value={selectedAddonQuantities[addon.id] ?? 1}
+                                      onChange={(event) => {
+                                        const raw = Number(event.target.value);
+                                        const next =
+                                          Number.isFinite(raw) && raw > 0 ? raw : 1;
+                                        setSelectedAddonQuantities((current) => ({
+                                          ...current,
+                                          [addon.id]: next,
+                                        }));
+                                      }}
+                                      className="h-7 w-14 px-1 text-center"
+                                    />
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      onClick={() => handleAddonQuantityChange(addon.id, 1)}
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       <div className="space-y-2">
                         <Label>Quantity</Label>
@@ -516,7 +681,7 @@ export function ManualOrderDialog({
                               <div>
                                 <p className="font-medium">{line.name}</p>
                                 <p className="text-sm text-muted-foreground">
-                                  {formatCurrency(line.price)} × {line.quantity}
+                                  {formatCurrency(line.unitPriceWithTax)} × {line.quantity}
                                 </p>
                                 {line.gstRate > 0 && (
                                   <p className="text-xs text-muted-foreground">

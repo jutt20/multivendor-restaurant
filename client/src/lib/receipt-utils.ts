@@ -23,6 +23,8 @@ export interface ReceiptItem {
   gstMode: "include" | "exclude";
   gstAmount: number;
   lineTotal: number;
+  addons?: { name: string; price?: number }[];
+  notes?: string | null;
 }
 
 interface ReceiptData {
@@ -257,6 +259,7 @@ export function generateThermalReceipt(data: ReceiptData): string {
     .item-name { flex: 1; font-weight: bold; }
     .item-qty { width: 30px; text-align: center; }
     .item-price { width: 60px; text-align: right; }
+    .item-addons { font-weight: normal; font-size: 10px; margin-top: 1px; }
     .totals { margin: 10px 0; border-top: 1px dashed #000; padding-top: 5px; }
     .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; }
     .payment-section { margin: 12px 0; text-align: center; }
@@ -296,16 +299,31 @@ export function generateThermalReceipt(data: ReceiptData): string {
         <div class="item-qty">Qty</div>
         ${showPricing ? `<div class="item-price">Price</div>` : ""}
       </div>
-      ${items.map(item => {
-        const rowAmount =
-          item.gstMode === "include" ? item.lineTotal : item.baseSubtotal;
-        return `
+      ${items
+        .map((item) => {
+          const rowAmount =
+            item.gstMode === "include" ? item.lineTotal : item.baseSubtotal;
+          const addonsLabel =
+            item.addons && item.addons.length > 0
+              ? `<div class="item-addons">+ ${item.addons
+                  .map((addon) => addon.name)
+                  .join(", ")}</div>`
+              : "";
+          return `
       <div class="item-row">
-        <div class="item-name">${item.name}</div>
+        <div class="item-name">
+          ${item.name}
+          ${addonsLabel}
+        </div>
         <div class="item-qty">${item.quantity}</div>
-        ${showPricing ? `<div class="item-price">${formatINR(rowAmount)}</div>` : ""}
+        ${
+          showPricing
+            ? `<div class="item-price">${formatINR(rowAmount)}</div>`
+            : ""
+        }
       </div>`;
-      }).join('')}
+        })
+        .join("")}
     </div>` : ''}
 
     ${totalsSection}
@@ -574,10 +592,19 @@ export function generateA4Invoice(data: InvoiceData): string {
         ${
           items.length > 0
             ? items
-                .map(
-                  (item) => `
+                .map((item) => {
+                  const addonsLabel =
+                    item.addons && item.addons.length > 0
+                      ? `<div style="font-size:12px;color:#6b7280;margin-top:2px;">Addons: ${item.addons
+                          .map((addon) => addon.name)
+                          .join(", ")}</div>`
+                      : "";
+                  return `
         <tr>
-          <td>${item.name}</td>
+          <td>
+            ${item.name}
+            ${addonsLabel}
+          </td>
           <td>${item.quantity}</td>
           <td>${formatINR(
             item.gstMode === "include" ? item.unitPriceWithTax : item.unitPrice,
@@ -585,8 +612,8 @@ export function generateA4Invoice(data: InvoiceData): string {
           <td>${formatINR(
             item.gstMode === "include" ? item.lineTotal : item.baseSubtotal,
           )}</td>
-        </tr>`
-                )
+        </tr>`;
+                })
                 .join("")
             : `
         <tr>
@@ -894,7 +921,17 @@ export function generateA4Kot(data: ReceiptData): string {
 }
 
 const itemDescription = (item: ReceiptItem): string => {
-  return "";
+  const parts: string[] = [];
+
+  if (item.addons && item.addons.length > 0) {
+    parts.push(`Addons: ${item.addons.map((addon) => addon.name).join(", ")}`);
+  }
+
+  if (item.notes && item.notes.trim().length > 0) {
+    parts.push(`Notes: ${item.notes.trim()}`);
+  }
+
+  return parts.join(" | ");
 };
 
 export function printA4Kot(data: ReceiptData): void {
