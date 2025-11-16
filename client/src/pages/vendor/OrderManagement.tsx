@@ -1056,6 +1056,7 @@ const handlePrintKot = () => {
                   const pickupReference = order.pickupReference;
                   const urgency = getOrderUrgency(order);
                   const relativeTime = formatRelativeTime(order.createdAt);
+                  const normalizedStatus = normalizeStatusValue(order.status);
 
                   return (
                     <TableRow
@@ -1119,7 +1120,28 @@ const handlePrintKot = () => {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={order.status as any} />
+                        <button
+                          type="button"
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background",
+                            canAdvanceStatus(order.status) ? "cursor-pointer" : "cursor-default opacity-80",
+                          )}
+                          onClick={() => {
+                            if (!canAdvanceStatus(order.status) || updateStatusMutation.isPending) return;
+                            updateStatusMutation.mutate({
+                              orderId: order.id,
+                              status: getNextStatus(order.status),
+                            });
+                          }}
+                          disabled={!canAdvanceStatus(order.status) || updateStatusMutation.isPending}
+                          title={
+                            canAdvanceStatus(order.status)
+                              ? `Click to mark as ${getNextStatus(order.status)}`
+                              : "Order completed"
+                          }
+                        >
+                          <StatusBadge status={order.status as any} />
+                        </button>
                       </TableCell>
                       <TableCell className="font-semibold text-green-600 dark:text-green-400">
                         {formatINR(order.totalAmount)}
@@ -1132,7 +1154,28 @@ const handlePrintKot = () => {
                       </TableCell>
                       <TableCell>
                         <div className="space-y-1">
-                          <span className="text-sm font-medium">{parsedItems.length} {parsedItems.length === 1 ? "item" : "items"}</span>
+                          <span className="text-sm font-medium">
+                            {parsedItems.reduce((sum, item) => sum + (item.quantity ?? 0), 0)}{" "}
+                            {parsedItems.length === 1 ? "item" : "items"}
+                          </span>
+                          <div className="max-h-16 overflow-y-auto text-xs text-muted-foreground space-y-0.5">
+                            {parsedItems.map((item, index) => (
+                              <div key={`${order.id}-item-${index}`}>
+                                <span className="font-medium">
+                                  {item.quantity} × {item.name}
+                                </span>
+                                {item.addons && item.addons.length > 0 && (
+                                  <span className="block text-[11px] text-muted-foreground/80">
+                                    Addons:{" "}
+                                    {item.addons
+                                      .map((addon) => addon.name)
+                                      .filter(Boolean)
+                                      .join(", ")}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
                           {order.customerNotes && (
                             <TooltipProvider>
                               <Tooltip>
@@ -1158,19 +1201,6 @@ const handlePrintKot = () => {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
-                            {canAdvanceStatus(order.status) && (
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  updateStatusMutation.mutate({
-                                    orderId: order.id,
-                                    status: getNextStatus(order.status),
-                                  })
-                                }
-                                disabled={updateStatusMutation.isPending}
-                              >
-                                Mark as {getNextStatus(order.status)}
-                              </DropdownMenuItem>
-                            )}
                             <DropdownMenuItem
                               onClick={() => openKotDialog(order)}
                               disabled={!order.kotTicket}
@@ -1180,6 +1210,7 @@ const handlePrintKot = () => {
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => openPrintDialog(order)}
+                              disabled={normalizedStatus !== "completed"}
                             >
                               <Printer className="mr-2 h-4 w-4" />
                               Print Bill

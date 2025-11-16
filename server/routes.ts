@@ -4131,7 +4131,28 @@ app.get(
       }
 
       const orders = await storage.getDeliveryOrders(userId);
-      res.json({ success: true, orders });
+
+      // Enrich delivery orders with vendor / restaurant info
+      const vendorCache = new Map<number, any>();
+      const enrichedOrders = await Promise.all(
+        orders.map(async (order) => {
+          if (!order.vendorId) return order;
+
+          let vendor = vendorCache.get(order.vendorId);
+          if (vendor === undefined) {
+            vendor = await storage.getVendor(order.vendorId);
+            vendorCache.set(order.vendorId, vendor || null);
+          }
+
+          return {
+            ...order,
+            vendorId: order.vendorId,
+            restaurantName: vendor?.restaurantName ?? null,
+          };
+        }),
+      );
+
+      res.json({ success: true, orders: enrichedOrders });
     } catch (error) {
       console.error("Error fetching delivery orders:", error);
       res.status(500).json({ message: "Failed to fetch delivery orders" });
@@ -4620,13 +4641,33 @@ app.get(
       console.log(`[DEBUG] Searching for orders with phone: "${phone}"`);
 
       const orders = await storage.getDineInOrdersByPhone(phone);
-      
-      console.log(`[DEBUG] Found ${orders.length} orders for phone: "${phone}"`);
-      if (orders.length > 0) {
-        console.log(`[DEBUG] Sample order customerPhone: "${orders[0].customerPhone}"`);
+
+      // Enrich orders with vendor / restaurant info
+      const vendorCache = new Map<number, any>();
+      const enrichedOrders = await Promise.all(
+        orders.map(async (order) => {
+          if (!order.vendorId) return order;
+
+          let vendor = vendorCache.get(order.vendorId);
+          if (vendor === undefined) {
+            vendor = await storage.getVendor(order.vendorId);
+            vendorCache.set(order.vendorId, vendor || null);
+          }
+
+          return {
+            ...order,
+            vendorId: order.vendorId,
+            restaurantName: vendor?.restaurantName ?? null,
+          };
+        }),
+      );
+
+      console.log(`[DEBUG] Found ${enrichedOrders.length} orders for phone: "${phone}"`);
+      if (enrichedOrders.length > 0) {
+        console.log(`[DEBUG] Sample order customerPhone: "${enrichedOrders[0].customerPhone}"`);
       }
       
-      res.json(orders);
+      res.json(enrichedOrders);
     } catch (error) {
       console.error("Error fetching dine-in orders:", error);
       res.status(500).json({ message: "Failed to fetch dine-in orders" });
@@ -4699,7 +4740,28 @@ app.get(
       }
 
       const orders = await storage.getPickupOrders(userId);
-      res.json({ success: true, orders });
+
+      // Enrich pickup orders with vendor / restaurant info
+      const vendorCache = new Map<number, any>();
+      const enrichedOrders = await Promise.all(
+        orders.map(async (order) => {
+          if (!order.vendorId) return order;
+
+          let vendor = vendorCache.get(order.vendorId);
+          if (vendor === undefined) {
+            vendor = await storage.getVendor(order.vendorId);
+            vendorCache.set(order.vendorId, vendor || null);
+          }
+
+          return {
+            ...order,
+            vendorId: order.vendorId,
+            restaurantName: vendor?.restaurantName ?? null,
+          };
+        }),
+      );
+
+      res.json({ success: true, orders: enrichedOrders });
     } catch (error) {
       console.error("Error fetching pickup orders:", error);
       res.status(500).json({ message: "Failed to fetch pickup orders" });
