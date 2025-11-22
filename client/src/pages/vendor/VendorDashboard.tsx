@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { DateRange } from "react-day-picker";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, parseISO, subDays } from "date-fns";
@@ -130,6 +130,32 @@ export default function VendorDashboard() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Check vendor status and redirect if not approved
+  const { data: profile, error: profileError, isLoading: loadingProfile } = useQuery<VendorProfileResponse>({
+    queryKey: ["/api/vendor/profile"],
+    retry: false,
+  });
+
+  useEffect(() => {
+    // Handle API error response (403 from middleware)
+    if (profileError) {
+      const error = profileError as any;
+      if (error?.response?.status === 403 || error?.code === "VENDOR_NOT_APPROVED") {
+        const vendorStatus = error?.vendorStatus || "pending";
+        const rejectionReason = error?.rejectionReason || "";
+        window.location.href = `/vendor/status?status=${vendorStatus}&reason=${encodeURIComponent(rejectionReason)}`;
+        return;
+      }
+    }
+
+    // Check if vendor status exists and is not approved
+    if (profile?.vendor?.status && profile.vendor.status !== "approved") {
+      const status = profile.vendor.status || "pending";
+      const rejectionReason = profile.vendor.rejectionReason || "";
+      window.location.href = `/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`;
+    }
+  }, [profile, profileError]);
+
   useOrderStream({
     onEvent: (event) => {
       if (
@@ -164,10 +190,6 @@ export default function VendorDashboard() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ["/api/vendor/stats"],
     refetchInterval: 10000, // 10 seconds
-  });
-
-  const { data: profile, isLoading: loadingProfile } = useQuery<VendorProfileResponse>({
-    queryKey: ["/api/vendor/profile"],
   });
 
   const createDefaultRange = () => {

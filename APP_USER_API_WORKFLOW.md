@@ -457,7 +457,9 @@ All address endpoints require JWT authentication.
    ↓
 5. Place Delivery Order
    ↓
-6. Track Order Status
+6. Edit Delivery Order (Optional, if status is pending)
+   ↓
+7. Track Order Status
 ```
 
 ---
@@ -889,7 +891,85 @@ menu.categories[] = {
 
 ---
 
-### 5.9 Get Delivery Order History
+### 5.9 Edit Delivery Order
+**Endpoint:** `PUT /api/booking/order/:orderId`  
+**Authentication:** Required (JWT Token - user must own the order)
+
+**URL Parameters:**
+- `orderId` (integer, required) - Order ID to edit
+
+**Request Headers:**
+```
+Authorization: Bearer YOUR_JWT_TOKEN
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "user_id": 1,
+  "restaurant_id": 1,
+  "items": [
+    {
+      "itemId": 1,
+      "name": "Bruschetta",
+      "quantity": 3,
+      "price": "8.99",
+      "subtotal": "26.97"
+    },
+    {
+      "itemId": 3,
+      "name": "Spaghetti Carbonara",
+      "quantity": 2,
+      "price": "15.99",
+      "subtotal": "31.98"
+    }
+  ],
+  "total_amount": "58.95",
+  "delivery_address": "789 New Street, Apt 5C",
+  "delivery_latitude": 37.7849,
+  "delivery_longitude": -122.4094,
+  "customer_notes": "Ring doorbell twice"
+}
+```
+
+**Request Fields:**
+- `user_id` (integer, required) - User ID (must match authenticated user and order owner)
+- `restaurant_id` (integer, required) - Restaurant/Vendor ID (must match original order)
+- `items` (array, required) - Array of order items (must have at least one item)
+- `total_amount` (string, required) - Total order amount
+- `delivery_address` (string, required) - Delivery address
+- `delivery_latitude` (float, optional) - Delivery latitude
+- `delivery_longitude` (float, optional) - Delivery longitude
+- `customer_notes` (string, optional) - Special instructions
+
+**Response:**
+```json
+{
+  "success": true,
+  "order_id": 42,
+  "message": "Delivery order updated successfully"
+}
+```
+
+**Status Codes:**
+- `200` - Order updated successfully
+- `400` - Missing required fields or invalid data
+- `401` - Unauthorized (missing or invalid JWT token)
+- `403` - Order cannot be edited (not in editable status) or unauthorized access
+- `404` - Order or restaurant not found
+- `409` - Order cannot be edited (already accepted/preparing/completed)
+
+**Restrictions:**
+- Orders can only be edited when status is `pending`
+- Orders with status `accepted`, `preparing`, `ready`, `out_for_delivery`, or `delivered` cannot be edited
+- `user_id` must match the authenticated user and order owner
+- `restaurant_id` must match the original order
+- At least one menu item is required
+
+---
+
+### 5.10 Get Delivery Order History
 **Endpoint:** `GET /api/booking/list`  
 **Authentication:** Not Required
 
@@ -937,7 +1017,9 @@ GET /api/booking/list?user_id=1
    ↓
 5. Place Pickup Order
    ↓
-6. Track Order Status
+6. Edit Pickup Order (Optional, if status is pending)
+   ↓
+7. Track Order Status
 ```
 
 ---
@@ -1067,7 +1149,77 @@ Use the same cart endpoints as Home Delivery:
 
 ---
 
-### 6.5 Get Pickup Order History
+### 6.5 Edit Pickup Order
+**Endpoint:** `PUT /api/pickup/order/:orderId`  
+**Authentication:** Not Required (but user_id must match the order owner)
+
+**URL Parameters:**
+- `orderId` (integer, required) - Order ID to edit
+
+**Request:**
+```json
+{
+  "user_id": 1,
+  "restaurant_id": 1,
+  "items": [
+    {
+      "itemId": 1,
+      "name": "Bruschetta",
+      "quantity": 3,
+      "price": "8.99",
+      "subtotal": "26.97"
+    },
+    {
+      "itemId": 3,
+      "name": "Spaghetti Carbonara",
+      "quantity": 2,
+      "price": "15.99",
+      "subtotal": "31.98"
+    }
+  ],
+  "total_amount": "58.95",
+  "customer_phone": "+1234567890",
+  "pickup_time": "2025-01-15T18:30:00Z",
+  "customer_notes": "Please have ready by 6:30 PM"
+}
+```
+
+**Request Fields:**
+- `user_id` (integer, required) - User ID (must match order owner)
+- `restaurant_id` (integer, required) - Restaurant/Vendor ID (must match original order)
+- `items` (array, required) - Array of order items (must have at least one item)
+- `total_amount` (string, required) - Total order amount
+- `customer_phone` (string, optional) - Customer phone number
+- `pickup_time` (string, optional) - Preferred pickup time (ISO 8601 format)
+- `customer_notes` (string, optional) - Special instructions
+
+**Response:**
+```json
+{
+  "success": true,
+  "order_id": 42,
+  "pickup_reference": "PICKUP-001",
+  "message": "Pickup order updated successfully"
+}
+```
+
+**Status Codes:**
+- `200` - Order updated successfully
+- `400` - Missing required fields or invalid data
+- `403` - Order cannot be edited (not in editable status) or pickup service not available
+- `404` - Order or restaurant not found
+- `409` - Order cannot be edited (already accepted/preparing/completed)
+
+**Restrictions:**
+- Orders can only be edited when status is `pending`
+- Orders with status `accepted`, `preparing`, `ready`, or `completed` cannot be edited
+- `user_id` and `restaurant_id` must match the original order
+- At least one menu item is required
+- Restaurant must have `isPickupEnabled: true`
+
+---
+
+### 6.6 Get Pickup Order History
 
 **Endpoint:** `GET /api/pickup/orders`  
 **Authentication:** Not Required
@@ -1121,7 +1273,9 @@ GET /api/pickup/orders?user_id=1
    ↓
 4. Place Dine-In Order
    ↓
-5. Track Order Status
+5. Edit Dine-In Order (Optional, if status is pending)
+   ↓
+6. Track Order Status
 ```
 
 ---
@@ -1254,7 +1408,59 @@ GET /api/pickup/orders?user_id=1
 
 ---
 
-### 7.4 Get Dine-In Order History
+### 7.4 Edit Dine-In Order
+**Endpoint:** `PUT /api/dinein/order/:orderId`  
+**Authentication:** Not Required (but user must own the order via customerPhone)
+
+**URL Parameters:**
+- `orderId` (integer, required) - Order ID to edit
+
+**Request:**
+```json
+{
+  "vendorId": 1,
+  "tableId": 5,
+  "items": "[{\"itemId\": 1, \"name\": \"Bruschetta\", \"quantity\": 3, \"price\": \"8.99\", \"subtotal\": \"26.97\"}]",
+  "totalAmount": "26.97",
+  "customerName": "John Doe",
+  "customerPhone": "+1234567890",
+  "customerNotes": "Extra cheese please"
+}
+```
+
+**Note:** `items` must be a JSON string, not an object.
+
+**Response:**
+```json
+{
+  "id": 15,
+  "vendorId": 1,
+  "tableId": 5,
+  "status": "pending",
+  "totalAmount": "26.97",
+  "customerName": "John Doe",
+  "customerPhone": "+1234567890",
+  "customerNotes": "Extra cheese please",
+  "updatedAt": "2025-01-15T12:45:00.000Z"
+}
+```
+
+**Status Codes:**
+- `200` - Order updated successfully
+- `400` - Missing required fields or invalid data
+- `403` - Order cannot be edited (not in editable status)
+- `404` - Order not found
+- `409` - Order cannot be edited (already accepted/preparing/completed)
+
+**Restrictions:**
+- Orders can only be edited when status is `pending`
+- Orders with status `accepted`, `preparing`, `ready`, `delivered`, or `completed` cannot be edited
+- `vendorId`, `tableId`, and `customerPhone` must match the original order
+- At least one menu item is required
+
+---
+
+### 7.5 Get Dine-In Order History
 **Endpoint:** `GET /api/dinein/orders`  
 **Authentication:** Not Required
 
@@ -1335,7 +1541,7 @@ pending → accepted → preparing → ready → delivered
 - `401` - Unauthorized (invalid credentials, expired OTP, or missing JWT token)
 - `403` - Forbidden (valid auth but insufficient permissions or ownership)
 - `404` - Not Found (resource doesn't exist)
-- `409` - Conflict (phone number already registered)
+- `409` - Conflict (phone number already registered, or order cannot be edited)
 - `500` - Internal Server Error
 
 ### Common Error Scenarios
@@ -1365,6 +1571,20 @@ pending → accepted → preparing → ready → delivered
 ```json
 {
   "message": "Invalid or expired OTP"
+}
+```
+
+#### 5. Order Cannot Be Edited
+```json
+{
+  "message": "Completed orders cannot be edited"
+}
+```
+
+#### 6. Order Not Found
+```json
+{
+  "message": "Order not found"
 }
 ```
 
@@ -1402,7 +1622,10 @@ pending → accepted → preparing → ready → delivered
 9. POST /api/booking/confirm
    → Place delivery order
    
-10. GET /api/booking/list?user_id=X
+10. PUT /api/booking/order/:orderId (Optional, if status is pending)
+    → Edit delivery order
+    
+11. GET /api/booking/list?user_id=X
     → Track order history
 ```
 
@@ -1432,7 +1655,10 @@ pending → accepted → preparing → ready → delivered
 7. POST /api/booking/confirm
    → Place delivery order
    
-8. GET /api/booking/list?user_id=X
+8. PUT /api/booking/order/:orderId (Optional, if status is pending)
+   → Edit delivery order
+   
+9. GET /api/booking/list?user_id=X
    → Track order history
 ```
 
@@ -1453,13 +1679,46 @@ pending → accepted → preparing → ready → delivered
 4. POST /api/dinein/order
    → Place order with items, customer info
    
-5. GET /api/dinein/orders?phone=+1234567890
+5. PUT /api/dinein/order/:orderId (Optional, if status is pending)
+   → Edit dine-in order
+   
+6. GET /api/dinein/orders?phone=+1234567890
    → Track order status by phone number
 ```
 
 ---
 
-### Workflow 4: Address Management
+### Workflow 4: Pickup Order
+
+```
+1. POST /api/login (if not already logged in)
+   → Login with phone + password, receive JWT token
+   
+2. GET /api/restaurants/nearby?latitude=X&longitude=Y
+   → Browse nearby restaurants (filter by isPickupEnabled: true)
+   
+3. GET /api/restaurants/:vendorId/menu
+   → View restaurant menu (check isPickupEnabled in services)
+   
+4. POST /api/cart/add (with JWT)
+   → Add items to cart
+   
+5. GET /api/cart/get (with JWT)
+   → Review cart
+   
+6. POST /api/pickup/order
+   → Place pickup order
+   
+7. PUT /api/pickup/order/:orderId (Optional, if status is pending)
+   → Edit pickup order
+   
+8. GET /api/pickup/orders?user_id=X
+   → Track pickup order history
+```
+
+---
+
+### Workflow 5: Address Management
 
 ```
 1. POST /api/login
@@ -1512,6 +1771,14 @@ pending → accepted → preparing → ready → delivered
 - Validate QR code format before sending
 - Handle invalid/expired QR codes gracefully
 
+### 6. Order Editing
+- Orders can only be edited when status is `pending`
+- Check order status before attempting to edit
+- Handle 409 errors gracefully when order is no longer editable
+- Ensure `user_id`, `vendorId`, and `restaurant_id` match the original order
+- Recalculate `total_amount` when updating items
+- Display clear messages to users about edit restrictions
+
 ---
 
 ## Testing
@@ -1551,6 +1818,51 @@ curl -X POST http://localhost:5000/api/cart/add \
   -d '{"item_id": 1, "quantity": 2}'
 ```
 
+#### Edit Delivery Order
+```bash
+curl -X PUT http://localhost:5000/api/booking/order/42 \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "restaurant_id": 1,
+    "items": [{"itemId": 1, "name": "Bruschetta", "quantity": 3, "price": "8.99", "subtotal": "26.97"}],
+    "total_amount": "26.97",
+    "delivery_address": "789 New Street, Apt 5C",
+    "customer_notes": "Ring doorbell twice"
+  }'
+```
+
+#### Edit Pickup Order
+```bash
+curl -X PUT http://localhost:5000/api/pickup/order/42 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "restaurant_id": 1,
+    "items": [{"itemId": 1, "name": "Bruschetta", "quantity": 3, "price": "8.99", "subtotal": "26.97"}],
+    "total_amount": "26.97",
+    "customer_phone": "+1234567890",
+    "pickup_time": "2025-01-15T18:30:00Z",
+    "customer_notes": "Please have ready by 6:30 PM"
+  }'
+```
+
+#### Edit Dine-In Order
+```bash
+curl -X PUT http://localhost:5000/api/dinein/order/15 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vendorId": 1,
+    "tableId": 5,
+    "items": "[{\"itemId\": 1, \"name\": \"Bruschetta\", \"quantity\": 3, \"price\": \"8.99\", \"subtotal\": \"26.97\"}]",
+    "totalAmount": "26.97",
+    "customerName": "John Doe",
+    "customerPhone": "+1234567890",
+    "customerNotes": "Extra cheese please"
+  }'
+```
+
 ---
 
 ## Support & Resources
@@ -1564,16 +1876,28 @@ curl -X POST http://localhost:5000/api/cart/add \
 
 ## Changelog
 
+### Version 1.1 (2025-01-15)
+- Added order editing APIs for app users
+  - Edit Dine-In Order: `PUT /api/dinein/order/:orderId` ✅ Implemented
+  - Edit Pickup Order: `PUT /api/pickup/order/:orderId` ✅ Implemented
+  - Edit Delivery Order: `PUT /api/booking/order/:orderId` ✅ Implemented
+- Updated workflow diagrams to include order editing steps
+- Added order editing best practices
+- Added error handling scenarios for order editing
+- Added cURL examples for order editing endpoints
+- **Note:** Orders can only be edited when status is `pending`
+
 ### Version 1.0 (2025-01-15)
 - Initial API workflow documentation
 - Complete authentication flow
 - Home delivery workflow
 - Dine-in QR code workflow
+- Pickup workflow
 - Address management
 - Order tracking
 
 ---
 
 **Last Updated:** January 15, 2025  
-**Document Version:** 1.0
+**Document Version:** 1.1
 

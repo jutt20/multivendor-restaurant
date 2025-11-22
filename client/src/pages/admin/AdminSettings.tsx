@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Settings, Key, Bell, Map } from "lucide-react";
+import { Settings, Key, Bell, Map, Eye, EyeOff } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +33,8 @@ function safeParseConfigValue(value: any): any {
 export default function AdminSettings() {
   const { toast } = useToast();
   const [configs, setConfigs] = useState<Record<string, AdminConfig>>({});
+  const [showTwilioToken, setShowTwilioToken] = useState(false);
+  const [showMapsApiKey, setShowMapsApiKey] = useState(false);
 
   const { data: twilioConfig, isLoading: loadingTwilio } = useQuery<AdminConfig>({
     queryKey: ["/api/admin/config/twilio_enabled"],
@@ -140,17 +142,32 @@ export default function AdminSettings() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="twilio-auth-token">Auth Token</Label>
-              <Input
-                id="twilio-auth-token"
-                type="password"
-                placeholder="••••••••••••••••••••••••••••••••"
-                defaultValue={safeParseConfigValue(twilioConfig?.value).authToken || ''}
-                onBlur={(e) => {
-                  const currentValue = safeParseConfigValue(twilioConfig?.value);
-                  currentValue.authToken = e.target.value;
-                  handleUpdateConfig('twilio_enabled', currentValue, twilioConfig?.isEnabled || false);
-                }}
-              />
+              <div className="relative">
+                <Input
+                  id="twilio-auth-token"
+                  type={showTwilioToken ? "text" : "password"}
+                  placeholder="••••••••••••••••••••••••••••••••"
+                  defaultValue={safeParseConfigValue(twilioConfig?.value).authToken || ''}
+                  onBlur={(e) => {
+                    const currentValue = safeParseConfigValue(twilioConfig?.value);
+                    currentValue.authToken = e.target.value;
+                    handleUpdateConfig('twilio_enabled', currentValue, twilioConfig?.isEnabled || false);
+                  }}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowTwilioToken(!showTwilioToken)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showTwilioToken ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="twilio-phone">Phone Number</Label>
@@ -275,17 +292,32 @@ export default function AdminSettings() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="maps-api-key">API Key</Label>
-              <Input
-                id="maps-api-key"
-                type="password"
-                placeholder="AIzaSy••••••••••••••••••••••••••••••"
-                defaultValue={safeParseConfigValue(mapsConfig?.value).apiKey || ''}
-                onBlur={(e) => {
-                  const currentValue = safeParseConfigValue(mapsConfig?.value);
-                  currentValue.apiKey = e.target.value;
-                  handleUpdateConfig('maps_enabled', currentValue, mapsConfig?.isEnabled || false);
-                }}
-              />
+              <div className="relative">
+                <Input
+                  id="maps-api-key"
+                  type={showMapsApiKey ? "text" : "password"}
+                  placeholder="AIzaSy••••••••••••••••••••••••••••••"
+                  defaultValue={safeParseConfigValue(mapsConfig?.value).apiKey || ''}
+                  onBlur={(e) => {
+                    const currentValue = safeParseConfigValue(mapsConfig?.value);
+                    currentValue.apiKey = e.target.value;
+                    handleUpdateConfig('maps_enabled', currentValue, mapsConfig?.isEnabled || false);
+                  }}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowMapsApiKey(!showMapsApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showMapsApiKey ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
             <p className="text-sm text-muted-foreground">
               Enter your Google Maps API key to enable location capture during vendor registration.

@@ -1,0 +1,1163 @@
+{
+	"info": {
+		"_postman_id": "quickbiteqr-app-user-apis",
+		"name": "QuickBiteQR - App User APIs",
+		"description": "Complete API collection for QuickBiteQR mobile app users. Includes authentication, profile management, address management, restaurant browsing, cart operations, and order management (delivery, pickup, dine-in).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Authentication",
+			"item": [
+				{
+					"name": "Register New User",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.user && response.user.id) {",
+									"        pm.collectionVariables.set(\"user_id\", response.user.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"John Doe\",\n  \"phone\": \"+1234567890\",\n  \"email\": \"john@example.com\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/register",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"register"
+							]
+						},
+						"description": "Register a new user with name, phone, and optional email. Phone number must be unique."
+					},
+					"response": []
+				},
+				{
+					"name": "Send OTP",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.otp) {",
+									"        pm.collectionVariables.set(\"otp\", response.otp);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+1234567890\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/send-otp",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"send-otp"
+							]
+						},
+						"description": "Send OTP to phone number for verification. In development, default OTP is '123456'."
+					},
+					"response": []
+				},
+				{
+					"name": "Verify OTP",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.token) {",
+									"        pm.collectionVariables.set(\"jwt_token\", response.token);",
+									"    }",
+									"    if (response.user && response.user.id) {",
+									"        pm.collectionVariables.set(\"user_id\", response.user.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+1234567890\",\n  \"otp\": \"{{otp}}\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/verify-otp",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"verify-otp"
+							]
+						},
+						"description": "Verify OTP and receive JWT token. Save the token for authenticated endpoints."
+					},
+					"response": []
+				},
+				{
+					"name": "Set Password",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+1234567890\",\n  \"password\": \"securePassword123\",\n  \"confirm_password\": \"securePassword123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/set-password",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"set-password"
+							]
+						},
+						"description": "Set password for future logins. User must be phone verified first."
+					},
+					"response": []
+				},
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.token) {",
+									"        pm.collectionVariables.set(\"jwt_token\", response.token);",
+									"    }",
+									"    if (response.user && response.user.id) {",
+									"        pm.collectionVariables.set(\"user_id\", response.user.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+1234567890\",\n  \"password\": \"securePassword123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"login"
+							]
+						},
+						"description": "Login with phone and password. Returns JWT token for authenticated endpoints."
+					},
+					"response": []
+				}
+			],
+			"description": "Authentication endpoints for user registration, OTP verification, and login."
+		},
+		{
+			"name": "2. User Profile",
+			"item": [
+				{
+					"name": "Get User Profile",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/user/profile",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"profile"
+							]
+						},
+						"description": "Get authenticated user's profile information. Requires JWT token."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Profile",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"John Smith\",\n  \"email\": \"newemail@example.com\",\n  \"phone\": \"+1987654321\",\n  \"city\": \"Los Angeles\",\n  \"state\": \"California\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/app_user/update",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"app_user",
+								"update"
+							]
+						},
+						"description": "Update user profile. All fields are optional, but at least one must be provided."
+					},
+					"response": []
+				}
+			],
+			"description": "User profile management endpoints."
+		},
+		{
+			"name": "3. Address Management",
+			"item": [
+				{
+					"name": "Create Address",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"home\",\n  \"fullAddress\": \"123 Main Street, Apt 4B\",\n  \"landmark\": \"Near Central Park\",\n  \"city\": \"New York\",\n  \"zipCode\": \"10001\",\n  \"latitude\": 40.7128,\n  \"longitude\": -74.0060,\n  \"isDefault\": false\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/address/create",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"address",
+								"create"
+							]
+						},
+						"description": "Create a new address. Type can be 'home', 'work', or 'other'."
+					},
+					"response": []
+				},
+				{
+					"name": "List User Addresses",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/address/list",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"address",
+								"list"
+							]
+						},
+						"description": "Get all addresses for the authenticated user."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Address",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"home\",\n  \"fullAddress\": \"Updated Address\",\n  \"city\": \"New York\",\n  \"zipCode\": \"10001\",\n  \"isDefault\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/address/update/:id",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"address",
+								"update",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Update an existing address by ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Address",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/address/delete/:id",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"address",
+								"delete",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Delete an address by ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Set Default Address",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/address/set-default/:id",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"address",
+								"set-default",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Set an address as the default address."
+					},
+					"response": []
+				}
+			],
+			"description": "Address management endpoints for delivery orders."
+		},
+		{
+			"name": "4. Restaurants & Menu",
+			"item": [
+				{
+					"name": "Get Nearby Restaurants",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/restaurants/nearby?latitude=37.7749&longitude=-122.4194",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"restaurants",
+								"nearby"
+							],
+							"query": [
+								{
+									"key": "latitude",
+									"value": "37.7749"
+								},
+								{
+									"key": "longitude",
+									"value": "-122.4194"
+								}
+							]
+						},
+						"description": "Get list of nearby restaurants. Requires latitude and longitude query parameters."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Restaurant Menu",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/restaurants/:vendorId/menu?latitude=37.7749&longitude=-122.4194",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"restaurants",
+								":vendorId",
+								"menu"
+							],
+							"query": [
+								{
+									"key": "latitude",
+									"value": "37.7749",
+									"description": "Optional - for distance calculation"
+								},
+								{
+									"key": "longitude",
+									"value": "-122.4194",
+									"description": "Optional - for distance calculation"
+								}
+							],
+							"variable": [
+								{
+									"key": "vendorId",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Get complete menu for a restaurant including categories, subcategories, items, and addons."
+					},
+					"response": []
+				}
+			],
+			"description": "Restaurant browsing and menu viewing endpoints."
+		},
+		{
+			"name": "5. Cart Operations",
+			"item": [
+				{
+					"name": "Add to Cart",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"item_id\": 1,\n  \"quantity\": 2\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/cart/add",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"cart",
+								"add"
+							]
+						},
+						"description": "Add item to cart. Cart can only contain items from one vendor at a time."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Cart",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/cart/get",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"cart",
+								"get"
+							]
+						},
+						"description": "Get all items in the cart with menu item details."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Cart Item",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"quantity\": 3\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/cart/update/:itemId",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"cart",
+								"update",
+								":itemId"
+							],
+							"variable": [
+								{
+									"key": "itemId",
+									"value": "1",
+									"description": "Cart item ID (not menu item ID)"
+								}
+							]
+						},
+						"description": "Update quantity of a cart item. itemId refers to cart item ID, not menu item ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Cart Item",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/cart/remove/:itemId",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"cart",
+								"remove",
+								":itemId"
+							],
+							"variable": [
+								{
+									"key": "itemId",
+									"value": "1",
+									"description": "Cart item ID"
+								}
+							]
+						},
+						"description": "Remove an item from the cart."
+					},
+					"response": []
+				},
+				{
+					"name": "Clear Cart",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/cart/clear",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"cart",
+								"clear"
+							]
+						},
+						"description": "Clear all items from the cart."
+					},
+					"response": []
+				}
+			],
+			"description": "Cart management endpoints. All require JWT authentication."
+		},
+		{
+			"name": "6. Delivery Orders",
+			"item": [
+				{
+					"name": "Place Delivery Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 1,\n  \"restaurant_id\": 1,\n  \"items\": [\n    {\n      \"itemId\": 1,\n      \"name\": \"Bruschetta\",\n      \"quantity\": 2,\n      \"price\": \"8.99\",\n      \"subtotal\": \"17.98\"\n    },\n    {\n      \"itemId\": 3,\n      \"name\": \"Spaghetti Carbonara\",\n      \"quantity\": 1,\n      \"price\": \"15.99\",\n      \"subtotal\": \"15.99\"\n    }\n  ],\n  \"total_amount\": \"33.97\",\n  \"delivery_address\": \"456 Oak Street, Apt 3B\",\n  \"delivery_latitude\": 37.7749,\n  \"delivery_longitude\": -122.4194,\n  \"customer_notes\": \"Ring doorbell twice\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/booking/confirm",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"booking",
+								"confirm"
+							]
+						},
+						"description": "Place a delivery order. Cart is automatically cleared after successful order placement."
+					},
+					"response": []
+				},
+				{
+					"name": "Edit Delivery Order",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{jwt_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 1,\n  \"restaurant_id\": 1,\n  \"items\": [\n    {\n      \"itemId\": 1,\n      \"name\": \"Bruschetta\",\n      \"quantity\": 3,\n      \"price\": \"8.99\",\n      \"subtotal\": \"26.97\"\n    },\n    {\n      \"itemId\": 3,\n      \"name\": \"Spaghetti Carbonara\",\n      \"quantity\": 2,\n      \"price\": \"15.99\",\n      \"subtotal\": \"31.98\"\n    }\n  ],\n  \"total_amount\": \"58.95\",\n  \"delivery_address\": \"789 New Street, Apt 5C\",\n  \"delivery_latitude\": 37.7849,\n  \"delivery_longitude\": -122.4094,\n  \"customer_notes\": \"Ring doorbell twice\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/booking/order/:orderId",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"booking",
+								"order",
+								":orderId"
+							],
+							"variable": [
+								{
+									"key": "orderId",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Edit a delivery order. Can only edit orders with status 'pending'. Requires JWT token and user must own the order."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Delivery Order History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/booking/list?user_id=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"booking",
+								"list"
+							],
+							"query": [
+								{
+									"key": "user_id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Get order history for a user. Requires user_id query parameter."
+					},
+					"response": []
+				}
+			],
+			"description": "Delivery order management endpoints."
+		},
+		{
+			"name": "7. Pickup Orders",
+			"item": [
+				{
+					"name": "Place Pickup Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 1,\n  \"restaurant_id\": 1,\n  \"items\": [\n    {\n      \"itemId\": 1,\n      \"name\": \"Bruschetta\",\n      \"quantity\": 2,\n      \"price\": \"8.99\",\n      \"subtotal\": \"17.98\"\n    },\n    {\n      \"itemId\": 3,\n      \"name\": \"Spaghetti Carbonara\",\n      \"quantity\": 1,\n      \"price\": \"15.99\",\n      \"subtotal\": \"15.99\"\n    }\n  ],\n  \"total_amount\": \"33.97\",\n  \"customer_phone\": \"+1234567890\",\n  \"pickup_time\": \"2025-01-15T18:30:00Z\",\n  \"customer_notes\": \"Please have ready by 6:30 PM\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/pickup/order",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"pickup",
+								"order"
+							]
+						},
+						"description": "Place a pickup order. Restaurant must have isPickupEnabled: true."
+					},
+					"response": []
+				},
+				{
+					"name": "Edit Pickup Order",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 1,\n  \"restaurant_id\": 1,\n  \"items\": [\n    {\n      \"itemId\": 1,\n      \"name\": \"Bruschetta\",\n      \"quantity\": 3,\n      \"price\": \"8.99\",\n      \"subtotal\": \"26.97\"\n    },\n    {\n      \"itemId\": 3,\n      \"name\": \"Spaghetti Carbonara\",\n      \"quantity\": 2,\n      \"price\": \"15.99\",\n      \"subtotal\": \"31.98\"\n    }\n  ],\n  \"total_amount\": \"58.95\",\n  \"customer_phone\": \"+1234567890\",\n  \"pickup_time\": \"2025-01-15T18:30:00Z\",\n  \"customer_notes\": \"Please have ready by 6:30 PM\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/pickup/order/:orderId",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"pickup",
+								"order",
+								":orderId"
+							],
+							"variable": [
+								{
+									"key": "orderId",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Edit a pickup order. Can only edit orders with status 'pending'. user_id must match order owner."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Pickup Order History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/pickup/orders?user_id=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"pickup",
+								"orders"
+							],
+							"query": [
+								{
+									"key": "user_id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Get pickup order history for a user. Requires user_id query parameter."
+					},
+					"response": []
+				}
+			],
+			"description": "Pickup order management endpoints."
+		},
+		{
+			"name": "8. Dine-In Orders",
+			"item": [
+				{
+					"name": "Scan QR Code",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"qrData\": \"vendor:1:table:5\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/table/scan",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"table",
+								"scan"
+							]
+						},
+						"description": "Scan QR code at table. QR format: vendor:{vendorId}:table:{tableNumber}"
+					},
+					"response": []
+				},
+				{
+					"name": "Scan QR Code & Get Menu",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"qrData\": \"vendor:1:table:5\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/table/scan-menu",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"table",
+								"scan-menu"
+							]
+						},
+						"description": "Scan QR code and get restaurant info, table info, and complete menu in a single call. Recommended for better performance."
+					},
+					"response": []
+				},
+				{
+					"name": "Place Dine-In Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"vendorId\": 1,\n  \"tableId\": 5,\n  \"items\": \"[{\\\"itemId\\\": 1, \\\"name\\\": \\\"Bruschetta\\\", \\\"quantity\\\": 2, \\\"price\\\": \\\"8.99\\\", \\\"subtotal\\\": \\\"17.98\\\"}]\",\n  \"totalAmount\": \"17.98\",\n  \"customerName\": \"John Doe\",\n  \"customerPhone\": \"+1234567890\",\n  \"customerNotes\": \"Extra cheese please\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/dinein/order",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"dinein",
+								"order"
+							]
+						},
+						"description": "Place a dine-in order. Note: 'items' must be a JSON string, not an object."
+					},
+					"response": []
+				},
+				{
+					"name": "Edit Dine-In Order",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"vendorId\": 1,\n  \"tableId\": 5,\n  \"items\": \"[{\\\"itemId\\\": 1, \\\"name\\\": \\\"Bruschetta\\\", \\\"quantity\\\": 3, \\\"price\\\": \\\"8.99\\\", \\\"subtotal\\\": \\\"26.97\\\"}]\",\n  \"totalAmount\": \"26.97\",\n  \"customerName\": \"John Doe\",\n  \"customerPhone\": \"+1234567890\",\n  \"customerNotes\": \"Extra cheese please\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/dinein/order/:orderId",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"dinein",
+								"order",
+								":orderId"
+							],
+							"variable": [
+								{
+									"key": "orderId",
+									"value": "1"
+								}
+							]
+						},
+						"description": "Edit a dine-in order. Can only edit orders with status 'pending'. vendorId, tableId, and customerPhone must match original order. Note: 'items' must be a JSON string."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Dine-In Order History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/dinein/orders?phone=+1234567890",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"dinein",
+								"orders"
+							],
+							"query": [
+								{
+									"key": "phone",
+									"value": "+1234567890"
+								}
+							]
+						},
+						"description": "Get dine-in order history by phone number. Requires phone query parameter."
+					},
+					"response": []
+				}
+			],
+			"description": "Dine-in order management endpoints for QR code scanning workflow."
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:5000",
+			"type": "string"
+		},
+		{
+			"key": "jwt_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "otp",
+			"value": "123456",
+			"type": "string"
+		}
+	]
+}
+

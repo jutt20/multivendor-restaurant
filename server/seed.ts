@@ -32,6 +32,7 @@ async function seed() {
     const adminPassword = await bcrypt.hash('admin123', 10);
     const [adminUser] = await db.insert(users).values({
       id: 'admin_1',
+      username: 'admin',
       email: 'admin@quickbiteqr.com',
       password: adminPassword,
       fullName: 'Admin User',
@@ -44,6 +45,7 @@ async function seed() {
     const vendorPassword = await bcrypt.hash('vendor123', 10);
     const [vendorUser] = await db.insert(users).values({
       id: 'vendor_1',
+      username: 'vendor1',
       email: 'vendor@example.com',
       password: vendorPassword,
       fullName: 'John Doe',

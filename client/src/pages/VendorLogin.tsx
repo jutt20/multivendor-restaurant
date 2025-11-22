@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, Mail, Lock, Loader2 } from "lucide-react";
+import { ArrowLeft, Mail, Lock, Loader2, Eye, EyeOff } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
@@ -25,8 +25,9 @@ class SessionConflictError extends Error {
 export default function VendorLogin() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
 
   const { data: user } = useQuery({
@@ -41,23 +42,43 @@ export default function VendorLogin() {
 
   useEffect(() => {
     if (user) {
-      // Small delay to ensure auth state is properly set
-      setTimeout(() => {
-        if (user.role === "vendor") {
-          setLocation("/vendor");
-        } else if (user.role === "owner") {
-          setLocation("/owner");
-        } else if (user.role === "admin") {
-          setLocation("/admin");
-        } else if (user.role === "captain") {
-          setLocation("/captain");
-        }
-      }, 100);
+      // Check vendor status if vendor role
+      if (user.role === "vendor") {
+        // Fetch vendor status
+        fetch("/api/vendor/profile", { credentials: "include" })
+          .then(async (res) => {
+            if (res.ok) {
+              const data = await res.json();
+              if (data.vendor?.status !== "approved") {
+                // Redirect to status page if not approved
+                const status = data.vendor?.status || "pending";
+                const rejectionReason = data.vendor?.rejectionReason || "";
+                setLocation(`/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`);
+              } else {
+                // Approved vendor, go to dashboard
+                setLocation("/vendor");
+              }
+            } else {
+              // If profile fetch fails, still try to go to vendor (will be handled by protected routes)
+              setLocation("/vendor");
+            }
+          })
+          .catch(() => {
+            // On error, redirect to vendor (will be handled by protected routes)
+            setLocation("/vendor");
+          });
+      } else if (user.role === "owner") {
+        setLocation("/owner");
+      } else if (user.role === "admin") {
+        setLocation("/admin");
+      } else if (user.role === "captain") {
+        setLocation("/captain");
+      }
     }
   }, [user, setLocation]);
 
   const loginMutation = useMutation({
-    mutationFn: async (credentials: { email: string; password: string }) => {
+    mutationFn: async (credentials: { username: string; password: string }) => {
       const res = await fetch("/api/auth/email-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -67,8 +88,9 @@ export default function VendorLogin() {
 
       if (!res.ok) {
         let errorMessage = "Login failed";
+        let errorData: any = {};
         try {
-          const errorData = await res.json();
+          errorData = await res.json();
           if (errorData?.message) {
             errorMessage = errorData.message;
           }
@@ -80,6 +102,15 @@ export default function VendorLogin() {
           throw new SessionConflictError(errorMessage);
         }
 
+        // If vendor not approved, throw error with status info
+        if (res.status === 403 && errorData?.code === "VENDOR_NOT_APPROVED") {
+          const vendorError = new Error(errorMessage);
+          (vendorError as any).code = "VENDOR_NOT_APPROVED";
+          (vendorError as any).vendorStatus = errorData.vendorStatus;
+          (vendorError as any).rejectionReason = errorData.rejectionReason;
+          throw vendorError;
+        }
+
         throw new Error(errorMessage);
       }
 
@@ -88,6 +119,29 @@ export default function VendorLogin() {
     onSuccess: async (data) => {
       // Wait for auth query to refetch before redirecting
       await queryClient.refetchQueries({ queryKey: ["/api/auth/user"] });
+      
+      // Check if vendor is approved - redirect to status page if not
+      if (data.user.role === "vendor") {
+        if (data.vendor?.status !== "approved") {
+          // Not approved - redirect to status page
+          const status = data.vendor?.status || "pending";
+          const rejectionReason = data.vendor?.rejectionReason || "";
+          setLocation(`/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`);
+          return;
+        } else {
+          // Approved vendor - show success and go to dashboard
+          toast({
+            title: "Login Successful",
+            description: `Welcome back!`,
+          });
+          setTimeout(() => {
+            setLocation("/vendor");
+          }, 100);
+          return;
+        }
+      }
+
+      // Non-vendor users
       toast({
         title: "Login Successful",
         description: `Welcome back!`,
@@ -95,9 +149,7 @@ export default function VendorLogin() {
 
       // Small delay to ensure auth state is updated in the router
       setTimeout(() => {
-        if (data.user.role === "vendor") {
-          setLocation("/vendor");
-        } else if (data.user.role === "owner") {
+        if (data.user.role === "owner") {
           setLocation("/owner");
         } else if (data.user.role === "admin") {
           setLocation("/admin");
@@ -128,15 +180,15 @@ export default function VendorLogin() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
+    if (!username || !password) {
       toast({
         title: "Validation Error",
-        description: "Please enter both email and password",
+        description: "Please enter both username and password",
         variant: "destructive",
       });
       return;
     }
-    loginMutation.mutate({ email, password });
+    loginMutation.mutate({ username, password });
   };
 
   return (
@@ -176,7 +228,7 @@ export default function VendorLogin() {
               </div>
               <CardTitle className="text-2xl">Vendor & Admin Sign In</CardTitle>
               <CardDescription>
-                Enter your email and password to access your dashboard
+                Enter your username and password to access your dashboard
               </CardDescription>
             </CardHeader>
 
@@ -184,16 +236,16 @@ export default function VendorLogin() {
               {/* LOGIN FORM */}
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
+                  <Label htmlFor="username">Username</Label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
-                      id="email"
-                      type="email"
-                      placeholder="admin@quickbiteqr.com"
+                      id="username"
+                      type="text"
+                      placeholder="Enter your username"
                       className="pl-10"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
                       disabled={loginMutation.isPending}
                     />
                   </div>
@@ -205,13 +257,25 @@ export default function VendorLogin() {
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
                       id="password"
-                      type="password"
+                      type={showPassword ? "text" : "password"}
                       placeholder="Enter your password"
-                      className="pl-10"
+                      className="pl-10 pr-10"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loginMutation.isPending}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      tabIndex={-1}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
                   </div>
                 </div>
 

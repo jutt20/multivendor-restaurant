@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Users as UsersIcon, Trash2 } from "lucide-react";
+import { Plus, Users as UsersIcon, Trash2, Eye, EyeOff } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,6 +41,7 @@ type CaptainFormValues = z.infer<typeof captainFormSchema>;
 
 export default function CaptainManagement() {
   const [isCreating, setIsCreating] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const { toast } = useToast();
 
   const { data: captains, isLoading } = useQuery<Captain[]>({
@@ -163,7 +164,21 @@ export default function CaptainManagement() {
                     <FormItem>
                       <FormLabel>Password</FormLabel>
                       <FormControl>
-                        <Input {...field} type="password" placeholder="••••••••" data-testid="input-captain-password" />
+                        <div className="relative">
+                          <Input {...field} type={showPassword ? "text" : "password"} placeholder="••••••••" data-testid="input-captain-password" className="pr-10" />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            tabIndex={-1}
+                          >
+                            {showPassword ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>

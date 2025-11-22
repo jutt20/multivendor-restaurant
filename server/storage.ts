@@ -54,7 +54,7 @@ import {
 } from "@shared/schema";
 import { addresses, type Address, type InsertAddress } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, inArray, ne, sql, gte, lte, like, ilike, or } from "drizzle-orm";
+import { eq, and, desc, asc, inArray, ne, sql, gte, lte, like, ilike, or, isNotNull } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { eachDayOfInterval, format as formatDate, subDays } from "date-fns";
 
@@ -100,6 +100,7 @@ export interface IStorage {
   // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<UpsertUser>): Promise<User>;
   getAllSystemUsers(filters?: {
@@ -260,6 +261,18 @@ export interface IStorage {
   getVendorDeliveryOrders(vendorId: number): Promise<DeliveryOrder[]>;
   getVendorDeliveryOrdersPaginated(vendorId: number, limit: number, offset: number): Promise<{ orders: DeliveryOrder[]; total: number }>;
   updateDeliveryOrderStatus(id: number, vendorId: number, status: string): Promise<DeliveryOrder>;
+  updateDeliveryOrderItems(
+    orderId: number,
+    userId: number,
+    updates: {
+      items: any;
+      totalAmount: string;
+      deliveryAddress?: string;
+      deliveryLatitude?: string | null;
+      deliveryLongitude?: string | null;
+      customerNotes?: string | null;
+    },
+  ): Promise<DeliveryOrder>;
   createDeliveryKot(deliveryOrder: DeliveryOrder): Promise<KotTicket>;
   
   // Pickup Order operations
@@ -269,6 +282,17 @@ export interface IStorage {
   getVendorPickupOrders(vendorId: number): Promise<PickupOrder[]>;
   getVendorPickupOrdersPaginated(vendorId: number, limit: number, offset: number): Promise<{ orders: PickupOrder[]; total: number }>;
   updatePickupOrderStatus(id: number, vendorId: number, status: string): Promise<PickupOrder>;
+  updatePickupOrderItems(
+    orderId: number,
+    userId: number,
+    updates: {
+      items: any;
+      totalAmount: string;
+      customerPhone?: string | null;
+      pickupTime?: Date | null;
+      customerNotes?: string | null;
+    },
+  ): Promise<PickupOrder>;
   createPickupKot(pickupOrder: PickupOrder): Promise<KotTicket>;
   
   // Public API operations
@@ -576,6 +600,22 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    if (!username || !username.trim()) {
+      return undefined;
+    }
+    try {
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.username, username.trim()), isNotNull(users.username)));
+      return user;
+    } catch (error) {
+      console.error('Error in getUserByUsername:', error);
+      throw error;
+    }
+  }
+
   async upsertUser(userData: UpsertUser): Promise<User> {
     const [user] = await db
       .insert(users)
@@ -606,8 +646,24 @@ export class DatabaseStorage implements IStorage {
     isActive?: boolean;
     isVerified?: boolean;
     search?: string;
-  }): Promise<User[]> {
-    let query = db.select().from(users);
+  }): Promise<(User & { restaurantName?: string | null })[]> {
+    let query = db
+      .select({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+        password: users.password,
+        fullName: users.fullName,
+        phoneNumber: users.phoneNumber,
+        role: users.role,
+        isActive: users.isActive,
+        isVerified: users.isVerified,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+        restaurantName: vendors.restaurantName,
+      })
+      .from(users)
+      .leftJoin(vendors, eq(users.id, vendors.userId));
 
     const conditions: ReturnType<typeof eq>[] = [];
 
@@ -639,6 +695,7 @@ export class DatabaseStorage implements IStorage {
           user.fullName,
           user.phoneNumber,
           user.role,
+          user.restaurantName,
         ].filter(Boolean);
 
         return searchableFields.some((field) =>
@@ -2497,6 +2554,50 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async updateDeliveryOrderItems(
+    orderId: number,
+    userId: number,
+    updates: {
+      items: any;
+      totalAmount: string;
+      deliveryAddress?: string;
+      deliveryLatitude?: string | null;
+      deliveryLongitude?: string | null;
+      customerNotes?: string | null;
+    },
+  ): Promise<DeliveryOrder> {
+    const updateData: any = {
+      items: typeof updates.items === 'string' ? updates.items : JSON.stringify(updates.items),
+      totalAmount: updates.totalAmount,
+      updatedAt: new Date(),
+    };
+
+    if (updates.deliveryAddress !== undefined) {
+      updateData.deliveryAddress = updates.deliveryAddress;
+    }
+    if (updates.deliveryLatitude !== undefined) {
+      updateData.deliveryLatitude = updates.deliveryLatitude;
+    }
+    if (updates.deliveryLongitude !== undefined) {
+      updateData.deliveryLongitude = updates.deliveryLongitude;
+    }
+    if (updates.customerNotes !== undefined) {
+      updateData.customerNotes = updates.customerNotes;
+    }
+
+    const [updated] = await db
+      .update(deliveryOrders)
+      .set(updateData)
+      .where(and(eq(deliveryOrders.id, orderId), eq(deliveryOrders.userId, userId)))
+      .returning();
+
+    if (!updated) {
+      throw new Error("Delivery order not found");
+    }
+
+    return updated;
+  }
+
   // Create KOT for delivery orders
   // Note: KOT requires orderId from orders table, so we create a temporary order entry
   async createDeliveryKot(deliveryOrder: DeliveryOrder): Promise<KotTicket> {
@@ -2688,6 +2789,46 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Pickup order not found");
     }
     
+    return updated;
+  }
+
+  async updatePickupOrderItems(
+    orderId: number,
+    userId: number,
+    updates: {
+      items: any;
+      totalAmount: string;
+      customerPhone?: string | null;
+      pickupTime?: Date | null;
+      customerNotes?: string | null;
+    },
+  ): Promise<PickupOrder> {
+    const updateData: any = {
+      items: typeof updates.items === 'string' ? updates.items : JSON.stringify(updates.items),
+      totalAmount: updates.totalAmount,
+      updatedAt: new Date(),
+    };
+
+    if (updates.customerPhone !== undefined) {
+      updateData.customerPhone = updates.customerPhone;
+    }
+    if (updates.pickupTime !== undefined) {
+      updateData.pickupTime = updates.pickupTime;
+    }
+    if (updates.customerNotes !== undefined) {
+      updateData.customerNotes = updates.customerNotes;
+    }
+
+    const [updated] = await db
+      .update(pickupOrders)
+      .set(updateData)
+      .where(and(eq(pickupOrders.id, orderId), eq(pickupOrders.userId, userId)))
+      .returning();
+
+    if (!updated) {
+      throw new Error("Pickup order not found");
+    }
+
     return updated;
   }
 

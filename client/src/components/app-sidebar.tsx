@@ -26,6 +26,7 @@ import {
   LogOut,
   QrCode,
   Image as ImageIcon,
+  UserCircle,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "./ui/button";
@@ -73,6 +74,7 @@ export function AppSidebar() {
     { title: "App Users", url: "/admin/users", icon: Users },
     { title: "Banners", url: "/admin/banners", icon: ImageIcon },
     { title: "Settings", url: "/admin/settings", icon: Settings },
+    { title: "Profile", url: "/admin/profile", icon: UserCircle },
   ];
 
   const navSections: NavSection[] = (() => {

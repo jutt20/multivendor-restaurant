@@ -64,8 +64,12 @@ import {
   Power,
   Shield,
   UserPlus,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import type { User, AppUser } from "@shared/schema";
+
+type UserWithRestaurant = User & { restaurantName?: string | null };
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -116,9 +120,11 @@ function SystemUsersTab() {
   const [verificationFilter, setVerificationFilter] = useState<string>("all");
   const [sortField, setSortField] = useState<SystemUserSortField>("createdAt");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
-  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editingUser, setEditingUser] = useState<UserWithRestaurant | null>(null);
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Debounce search term
   useEffect(() => {
@@ -138,7 +144,7 @@ function SystemUsersTab() {
     return params.toString();
   }, [debouncedSearchTerm, roleFilter, statusFilter, verificationFilter]);
 
-  const { data: users, isLoading } = useQuery<User[]>({
+  const { data: users, isLoading } = useQuery<UserWithRestaurant[]>({
     queryKey: ["/api/admin/system-users", queryParams],
     queryFn: async () => {
       const url = `/api/admin/system-users${queryParams ? `?${queryParams}` : ""}`;
@@ -153,7 +159,7 @@ function SystemUsersTab() {
       }
 
       try {
-        return JSON.parse(rawBody) as User[];
+        return JSON.parse(rawBody) as UserWithRestaurant[];
       } catch {
         throw new Error(
           rawBody && rawBody.trim().startsWith("<")
@@ -168,7 +174,7 @@ function SystemUsersTab() {
 
   // Mutations
   const updateUserMutation = useMutation({
-    mutationFn: async (data: { id: string; updates: Partial<User> }) => {
+    mutationFn: async (data: { id: string; updates: Partial<UserWithRestaurant> }) => {
       const res = await apiRequest("PUT", `/api/admin/system-users/${data.id}`, data.updates);
       return await res.json();
     },
@@ -403,7 +409,7 @@ function SystemUsersTab() {
     }
   };
 
-  const handleEdit = (user: User) => {
+  const handleEdit = (user: UserWithRestaurant) => {
     setEditForm({
       fullName: user.fullName || "",
       email: user.email || "",
@@ -415,13 +421,19 @@ function SystemUsersTab() {
       vendorId: "",
     });
     setEditingUser(user);
+    setShowEditPassword(false);
   };
 
   const handleSaveEdit = () => {
     if (!editingUser) return;
+    const updates: Partial<typeof editForm> = { ...editForm };
+    // Only include password if it's not empty
+    if (!updates.password || updates.password.trim() === "") {
+      delete updates.password;
+    }
     updateUserMutation.mutate({
       id: editingUser.id,
-      updates: editForm,
+      updates,
     });
   };
 
@@ -621,6 +633,7 @@ function SystemUsersTab() {
                       <th className="text-left py-3 px-4 font-semibold">
                         <SortButton field="role">Role</SortButton>
                       </th>
+                      <th className="text-left py-3 px-4 font-semibold">Restaurant</th>
                       <th className="text-left py-3 px-4 font-semibold">Status</th>
                       <th className="text-left py-3 px-4 font-semibold">
                         <SortButton field="createdAt">Created</SortButton>
@@ -660,6 +673,9 @@ function SystemUsersTab() {
                           <Badge variant={getRoleBadgeVariant(user.role)}>
                             {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
                           </Badge>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="text-sm">{user.restaurantName || "N/A"}</span>
                         </td>
                         <td className="py-4 px-4">
                           <div className="flex flex-col gap-1">
@@ -788,6 +804,31 @@ function SystemUsersTab() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-password">Password (leave blank to keep current)</Label>
+              <div className="relative">
+                <Input
+                  id="edit-password"
+                  type={showEditPassword ? "text" : "password"}
+                  value={editForm.password}
+                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                  placeholder="Enter new password (min 4 characters)"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowEditPassword(!showEditPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showEditPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center space-x-2">
                 <input
@@ -881,14 +922,29 @@ function SystemUsersTab() {
             </div>
             <div className="grid gap-2">
               <Label htmlFor="create-password">Password *</Label>
-              <Input
-                id="create-password"
-                type="password"
-                value={createForm.password}
-                onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                placeholder="Enter password (min 6 characters)"
-                required
-              />
+              <div className="relative">
+                <Input
+                  id="create-password"
+                  type={showPassword ? "text" : "password"}
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                  placeholder="Enter password (min 4 characters)"
+                  required
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="create-phoneNumber">Phone Number</Label>

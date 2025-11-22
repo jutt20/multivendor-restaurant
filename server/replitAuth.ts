@@ -201,6 +201,25 @@ export const isVendor: RequestHandler = async (req, res, next) => {
     return res.status(403).json({ message: "Forbidden: Vendor access required" });
   }
   
+  // Check if vendor is approved - only approved vendors can access vendor endpoints
+  const vendor = await storage.getVendorByUserId(userId);
+  if (!vendor) {
+    return res.status(403).json({ 
+      message: "Vendor account not found",
+      code: "VENDOR_NOT_FOUND",
+      vendorStatus: null
+    });
+  }
+  
+  if (vendor.status !== "approved") {
+    return res.status(403).json({ 
+      message: `Your application is ${vendor.status}. Only approved vendors can access the platform.`,
+      code: "VENDOR_NOT_APPROVED",
+      vendorStatus: vendor.status,
+      rejectionReason: vendor.rejectionReason || null
+    });
+  }
+  
   next();
 };
 

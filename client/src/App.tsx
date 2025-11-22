@@ -1,6 +1,6 @@
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -14,6 +14,7 @@ import VendorLogin from "@/pages/VendorLogin";
 import TableQRRedirect from "@/pages/TableQRRedirect";
 
 import VendorDashboard from "@/pages/vendor/VendorDashboard";
+import VendorStatus from "@/pages/vendor/VendorStatus";
 import TableManagement from "@/pages/vendor/TableManagement";
 import CaptainManagement from "@/pages/vendor/CaptainManagement";
 import MenuManagement from "@/pages/vendor/MenuManagement";
@@ -29,6 +30,7 @@ import VendorApprovals from "@/pages/admin/VendorApprovals";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import UsersManagement from "@/pages/admin/UsersManagement";
 import AdminBanners from "@/pages/admin/AdminBanners";
+import AdminProfile from "@/pages/admin/AdminProfile";
 import OwnerDashboard from "@/pages/owner/OwnerDashboard";
 import { useEffect } from "react";
 
@@ -40,6 +42,41 @@ function Router() {
   const isOwner = user?.role === "owner";
   const isCaptain = user?.role === "captain";
   const isAdmin = user?.role === "admin";
+
+  // Check vendor status if vendor
+  const { data: vendorProfile, error: vendorProfileError } = useQuery({
+    queryKey: ["/api/vendor/profile"],
+    enabled: isVendor && isAuthenticated,
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await fetch("/api/vendor/profile", { credentials: "include" });
+      if (res.status === 403) {
+        const errorData = await res.json().catch(() => ({}));
+        const error = { response: { status: 403 }, ...errorData };
+        throw error;
+      }
+      if (!res.ok) return null;
+      return res.json();
+    },
+  });
+
+  const isVendorApproved = isVendor && vendorProfile?.vendor?.status === "approved";
+  
+  // Handle vendor profile error (403 - not approved)
+  useEffect(() => {
+    if (isVendor && vendorProfileError && !vendorProfile) {
+      const error = vendorProfileError as any;
+      if (error?.response?.status === 403 || error?.code === "VENDOR_NOT_APPROVED") {
+        const status = error?.vendorStatus || "pending";
+        const rejectionReason = error?.rejectionReason || "";
+        // Only redirect if not already on status page
+        if (!location.includes("/vendor/status")) {
+          setLocation(`/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`);
+        }
+      }
+    }
+  }, [isVendor, vendorProfileError, vendorProfile, location, setLocation]);
 
   // Redirect authenticated users to their default dashboard if on public route
   useEffect(() => {
@@ -74,6 +111,8 @@ function Router() {
       <Switch>
         <Route path="/" component={Landing} />
         <Route path="/login" component={VendorLogin} />
+        <Route path="/vendor-login" component={VendorLogin} />
+        <Route path="/vendor/status" component={VendorStatus} />
         <Route path="/order/table/:tableId" component={TableQRRedirect} />
         <Route component={NotFound} />
       </Switch>
@@ -84,7 +123,20 @@ function Router() {
   function RedirectToDashboard() {
     useEffect(() => {
       if (isVendor) {
-        setLocation("/vendor");
+        // Check vendor status before redirecting
+        if (isVendorApproved) {
+          setLocation("/vendor");
+        } else if (vendorProfile?.vendor) {
+          const status = vendorProfile.vendor.status || "pending";
+          const rejectionReason = vendorProfile.vendor.rejectionReason || "";
+          setLocation(`/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`);
+        } else {
+          // Wait for vendor profile to load
+          const timer = setTimeout(() => {
+            setLocation("/vendor/status?status=pending");
+          }, 1000);
+          return () => clearTimeout(timer);
+        }
       } else if (isOwner) {
         setLocation("/owner");
       } else if (isCaptain) {
@@ -92,7 +144,7 @@ function Router() {
       } else if (isAdmin) {
         setLocation("/admin");
       }
-    }, [isVendor, isOwner, isCaptain, isAdmin, setLocation]);
+    }, [isVendor, isVendorApproved, vendorProfile, isOwner, isCaptain, isAdmin, setLocation]);
     
     return (
       <div className="flex items-center justify-center h-full">
@@ -118,7 +170,10 @@ function Router() {
 
           <main className="flex-1 overflow-y-auto p-6 bg-background">
             <Switch>
-              {isVendor && (
+              {/* Vendor status route - accessible to all vendors regardless of approval */}
+              <Route path="/vendor/status" component={VendorStatus} />
+              {/* Only show vendor routes if approved */}
+              {isVendorApproved && (
                 <>
                   <Route path="/vendor/profile" component={ProfileSettings} />
                   <Route path="/vendor/tables" component={TableManagement} />
@@ -129,6 +184,21 @@ function Router() {
                   <Route path="/vendor" component={VendorDashboard} />
                   <Route path="/" component={VendorDashboard} />
                 </>
+              )}
+              {/* If vendor but not approved, redirect all vendor routes to status */}
+              {isVendor && !isVendorApproved && vendorProfile && (
+                <Route path="/vendor/:rest*" component={() => {
+                  useEffect(() => {
+                    const status = vendorProfile?.vendor?.status || "pending";
+                    const rejectionReason = vendorProfile?.vendor?.rejectionReason || "";
+                    setLocation(`/vendor/status?status=${status}&reason=${encodeURIComponent(rejectionReason)}`);
+                  }, []);
+                  return (
+                    <div className="flex items-center justify-center h-full">
+                      <p>Redirecting to status page...</p>
+                    </div>
+                  );
+                }} />
               )}
               {isOwner && (
                 <>
@@ -150,6 +220,7 @@ function Router() {
                   <Route path="/admin/users" component={UsersManagement} />
                   <Route path="/admin/banners" component={AdminBanners} />
                   <Route path="/admin/settings" component={AdminSettings} />
+                  <Route path="/admin/profile" component={AdminProfile} />
                   <Route path="/" component={AdminDashboard} />
                 </>
               )}

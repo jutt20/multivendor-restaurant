@@ -35,7 +35,8 @@ export const sessions = pgTable(
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email").unique(),
+  username: varchar("username").unique(), // Unique username for login
+  email: varchar("email"), // No longer unique - vendors can register multiple accounts from same email
   password: text("password"), // bcrypt hashed password
   fullName: varchar("full_name"),
   phoneNumber: varchar("phone_number"),

@@ -381,11 +381,37 @@ export function ManualOrderDialog({
         return sum + price * qty;
       }, 0);
       const unitPrice = line.basePrice + addonsTotalPerUnit;
-      const baseSubtotal = roundCurrency(unitPrice * line.quantity);
-      const gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
-      const lineTotal = roundCurrency(baseSubtotal + gstAmount);
-      const unitPriceWithTax =
-        line.quantity > 0 ? roundCurrency(lineTotal / line.quantity) : lineTotal;
+      
+      let baseSubtotal = 0;
+      let gstAmount = 0;
+      let lineTotal = 0;
+      let unitPriceWithTax = 0;
+
+      if (gstRate > 0) {
+        if (gstMode === "include") {
+          // For included GST: unitPrice already includes GST
+          // GST = Item Price * gstRate / (100 + gstRate)
+          // Original price = Item Price - GST
+          lineTotal = roundCurrency(unitPrice * line.quantity); // Total with GST included
+          gstAmount = roundCurrency(lineTotal * (gstRate / (100 + gstRate))); // Extract GST
+          baseSubtotal = roundCurrency(lineTotal - gstAmount); // Original price excluding GST
+          unitPriceWithTax = unitPrice; // Unit price already includes GST
+        } else {
+          // For excluded GST: GST is added on top
+          baseSubtotal = roundCurrency(unitPrice * line.quantity);
+          gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
+          lineTotal = roundCurrency(baseSubtotal + gstAmount);
+          unitPriceWithTax =
+            line.quantity > 0 ? roundCurrency(lineTotal / line.quantity) : lineTotal;
+        }
+      } else {
+        // No GST
+        baseSubtotal = roundCurrency(unitPrice * line.quantity);
+        lineTotal = baseSubtotal;
+        gstAmount = 0;
+        unitPriceWithTax = unitPrice;
+      }
+
       return {
         ...line,
         price: unitPrice,

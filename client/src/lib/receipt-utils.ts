@@ -73,10 +73,31 @@ const computeReceiptTotals = (
   const gstByRate = new Map<number, number>();
   const summary = items.reduce(
     (acc, item) => {
-      const subtotal = roundCurrency(item.baseSubtotal ?? item.unitPrice * item.quantity);
-      const gstAmount = roundCurrency(item.gstAmount ?? subtotal * (item.gstRate / 100));
       const gstRate = Number.isFinite(item.gstRate) ? item.gstRate : 0;
-      const lineTotal = roundCurrency(item.lineTotal ?? subtotal + gstAmount);
+      
+      // Calculate values based on what's provided
+      let subtotal = roundCurrency(item.baseSubtotal ?? item.unitPrice * item.quantity);
+      let gstAmount = 0;
+      let lineTotal = roundCurrency(item.lineTotal ?? subtotal);
+      
+      // If gstAmount is not provided, calculate it based on GST mode
+      if (item.gstAmount !== undefined && item.gstAmount !== null) {
+        gstAmount = roundCurrency(item.gstAmount);
+      } else if (gstRate > 0) {
+        if (item.gstMode === "include") {
+          // For included GST: lineTotal already includes GST
+          // GST = lineTotal * gstRate / (100 + gstRate)
+          const priceWithGst = item.lineTotal ?? (item.unitPriceWithTax ?? item.unitPrice) * item.quantity;
+          gstAmount = roundCurrency(priceWithGst * (gstRate / (100 + gstRate)));
+          subtotal = roundCurrency(priceWithGst - gstAmount);
+          lineTotal = roundCurrency(priceWithGst);
+        } else {
+          // For excluded GST: GST is added on top of subtotal
+          // GST = subtotal * gstRate / 100
+          gstAmount = roundCurrency(subtotal * (gstRate / 100));
+          lineTotal = roundCurrency(subtotal + gstAmount);
+        }
+      }
 
       acc.subtotal += subtotal;
       acc.totalTax += gstAmount;

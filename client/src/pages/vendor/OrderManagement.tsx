@@ -6,8 +6,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LucideIcon } from "lucide-react";
-import { ChefHat, Clock, Plus, Printer, Home, Truck, Package, ClipboardList, MapPin, User, Phone, AlertCircle, MoreHorizontal } from "lucide-react";
-import { PaymentType, printA4Invoice, printA4Kot, printThermalReceipt, type ReceiptItem } from "@/lib/receipt-utils";
+import { ChefHat, Clock, Plus, Home, Truck, Package, ClipboardList, MapPin, User, Phone, AlertCircle } from "lucide-react";
+import { printA4Kot, printThermalReceipt, type ReceiptItem } from "@/lib/receipt-utils";
 import type { MenuCategory, Order, Table } from "@shared/schema";
 import type { PrintableOrder } from "@/types/orders";
 import type { MenuItemWithAddons } from "@/types/menu";
@@ -40,12 +40,6 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -313,13 +307,9 @@ const playBeep = async () => {
 export default function OrderManagement() {
   const { toast } = useToast();
 
-  const [printDialogOpen, setPrintDialogOpen] = useState(false);
-  const [printTargetOrder, setPrintTargetOrder] = useState<PrintableOrder | null>(null);
-  const [paymentType, setPaymentType] = useState<PaymentType | null>(null);
-const [billFormat, setBillFormat] = useState<"thermal" | "a4">("a4");
-const [kotDialogOpen, setKotDialogOpen] = useState(false);
-const [kotTargetOrder, setKotTargetOrder] = useState<PrintableOrder | null>(null);
-const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
+  const [kotDialogOpen, setKotDialogOpen] = useState(false);
+  const [kotTargetOrder, setKotTargetOrder] = useState<PrintableOrder | null>(null);
+  const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
   const [orderType, setOrderType] = useState<OrderType>("dining");
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>(DEFAULT_STATUS_BY_TYPE.dining);
   const [currentPage, setCurrentPage] = useState(1);
@@ -334,22 +324,6 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
 
   const { data: tables, isLoading: loadingTables } = useQuery<Table[]>({
     queryKey: ["/api/vendor/tables"],
-  });
-
-  const completeOrderMutation = useMutation({
-    mutationFn: async (orderId: number) => {
-      await apiRequest("PUT", `/api/vendor/orders/${orderId}/status`, { status: "completed" });
-    },
-    onSuccess: async () => {
-      await queryClient.refetchQueries({ queryKey: ordersQueryKey, type: "active" });
-      queryClient.invalidateQueries({ queryKey: ["/api/vendor/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/captain/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/vendor/tables"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/captain/tables"] });
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ordersQueryKey });
-    },
   });
 
   const { data: menuItems, isLoading: loadingMenuItems } = useQuery<MenuItemWithAddons[]>({
@@ -562,111 +536,18 @@ const [kotFormat, setKotFormat] = useState<"thermal" | "a4">("thermal");
     [categoriesById, menuItemsById],
   );
 
-  const openPrintDialog = (order: PrintableOrder) => {
-    setPrintTargetOrder(order);
-    setPaymentType(null);
-  setBillFormat("a4");
-    setPrintDialogOpen(true);
+    const openKotDialog = (order: PrintableOrder) => {
+    setKotTargetOrder(order);
+    setKotFormat("thermal");
+    setKotDialogOpen(true);
   };
 
-  const closePrintDialog = () => {
-    setPrintDialogOpen(false);
-    setPrintTargetOrder(null);
-    setPaymentType(null);
+  const closeKotDialog = () => {
+    setKotDialogOpen(false);
+    setKotTargetOrder(null);
   };
 
-const handlePrintBill = async () => {
-  if (!printTargetOrder) {
-    return;
-  }
-
-  const orderId = printTargetOrder.id;
-  const items = parseOrderItems(printTargetOrder);
-
-  if (billFormat === "a4") {
-    if (!paymentType) {
-      toast({
-        title: "Select payment type",
-        description: "Choose Cash or UPI before generating the bill.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      await printA4Invoice({
-        order: printTargetOrder,
-        items,
-        paymentType,
-        restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
-        restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
-        restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
-        paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
-      });
-    } catch (error) {
-      console.error("Receipt print error:", error);
-      toast({
-        title: "Error",
-        description: "Failed to generate bill. Please try again.",
-        variant: "destructive",
-      });
-      return;
-    }
-  } else {
-    try {
-      await printThermalReceipt({
-        order: printTargetOrder,
-        items,
-        paymentType: paymentType ?? undefined,
-        restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
-        restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
-        restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
-        paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
-        title: "Customer Bill",
-        ticketNumber: `BILL-${orderId}`,
-      });
-    } catch (error) {
-      console.error("Thermal bill print error:", error);
-      toast({
-        title: "Error",
-        description: "Failed to print thermal bill. Please try again.",
-        variant: "destructive",
-      });
-      return;
-    }
-  }
-
-  try {
-    await completeOrderMutation.mutateAsync(orderId);
-  } catch (error) {
-    console.error("Failed to mark order completed after billing:", error);
-    toast({
-      title: "Order completion failed",
-      description: "Bill was printed, but the order could not be marked completed. Please retry.",
-      variant: "destructive",
-    });
-    return;
-  }
-
-  toast({
-    title: "Bill generated",
-    description: "Order closed and table marked available.",
-  });
-  closePrintDialog();
-};
-
-const openKotDialog = (order: PrintableOrder) => {
-  setKotTargetOrder(order);
-  setKotFormat("thermal");
-  setKotDialogOpen(true);
-};
-
-const closeKotDialog = () => {
-  setKotDialogOpen(false);
-  setKotTargetOrder(null);
-};
-
-const handlePrintKot = () => {
+  const handlePrintKot = () => {
   if (!kotTargetOrder) {
     return;
   }
@@ -684,6 +565,7 @@ const handlePrintKot = () => {
         title: "Kitchen Order Ticket",
         ticketNumber: kotTargetOrder.kotTicket?.ticketNumber ?? `KOT-${kotTargetOrder.id}`,
         hidePricing: true,
+        paymentQrCodeUrl: null, // KOT should not have QR code
       });
     } else {
       printA4Kot({
@@ -695,6 +577,7 @@ const handlePrintKot = () => {
         title: "Kitchen Order Ticket",
         ticketNumber: kotTargetOrder.kotTicket?.ticketNumber ?? `KOT-${kotTargetOrder.id}`,
         hidePricing: true,
+        paymentQrCodeUrl: null, // KOT should not have QR code
       });
     }
 
@@ -742,7 +625,7 @@ const handlePrintKot = () => {
 
       queryClient.setQueryData<PrintableOrder[]>(ordersQueryKey, (old) => {
         if (!old) return old;
-        if (status === "delivered" || status === "completed") {
+        if (status === "completed") {
           return old.filter((order) => order.id !== orderId);
         }
         return old.map((order) => (order.id === orderId ? { ...order, status } : order));
@@ -969,7 +852,6 @@ const handlePrintKot = () => {
             tablesLoading={loadingTables}
             itemsLoading={loadingMenuItems || loadingCategories}
             invalidateQueryKeys={[ordersQueryKey, ["/api/vendor/tables"]]}
-            onOrderCreated={() => setPaymentType(null)}
           />
         )}
       </div>
@@ -1237,29 +1119,16 @@ const handlePrintKot = () => {
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuItem
-                              onClick={() => openKotDialog(order)}
-                              disabled={!order.kotTicket}
-                            >
-                              <ChefHat className="mr-2 h-4 w-4" />
-                              Print KOT
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => openPrintDialog(order)}
-                              disabled={normalizedStatus !== "completed"}
-                            >
-                              <Printer className="mr-2 h-4 w-4" />
-                              Print Bill
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openKotDialog(order)}
+                          disabled={!order.kotTicket}
+                          className="gap-2"
+                        >
+                          <ChefHat className="h-4 w-4" />
+                          Print KOT
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
@@ -1386,127 +1255,6 @@ const handlePrintKot = () => {
           </CardContent>
         </Card>
       )}
-      <Dialog open={printDialogOpen} onOpenChange={(open) => (open ? setPrintDialogOpen(true) : closePrintDialog())}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Generate Bill</DialogTitle>
-            <DialogDescription>
-              Choose the format and payment details before printing the customer bill.
-            </DialogDescription>
-          </DialogHeader>
-
-          {printTargetOrder && (
-            <div className="space-y-4">
-              <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
-                <div className="font-semibold text-base flex items-center gap-2">
-                  <Printer className="h-4 w-4" />
-                  Order #{printTargetOrder.id}
-                </div>
-                <div className="grid gap-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Total Amount:</span>
-                    <span className="font-bold text-primary text-base">{formatINR(printTargetOrder.totalAmount)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Customer:</span>
-                    <span className="font-medium">{printTargetOrder.customerName || "Guest"}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Table:</span>
-                    <span className="font-medium">
-                      {printTargetOrder.tableNumber ?? printTargetOrder.tableId ?? "N/A"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <Label htmlFor="bill-format" className="text-base font-semibold">Print Format</Label>
-                <RadioGroup
-                  id="bill-format"
-                  value={billFormat}
-                  onValueChange={(value) => setBillFormat(value as "thermal" | "a4")}
-                  className="grid gap-3"
-                >
-                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                    <RadioGroupItem value="thermal" id="bill-format-thermal" className="mt-1" />
-                    <Label htmlFor="bill-format-thermal" className="flex flex-col flex-1 cursor-pointer">
-                      <span className="font-semibold text-base mb-1">Thermal Receipt</span>
-                      <span className="text-sm text-muted-foreground">
-                        Compact ticket for 58mm/80mm printers.
-                      </span>
-                    </Label>
-                  </div>
-                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                    <RadioGroupItem value="a4" id="bill-format-a4" className="mt-1" />
-                    <Label htmlFor="bill-format-a4" className="flex flex-col flex-1 cursor-pointer">
-                      <span className="font-semibold text-base mb-1">A4 Invoice</span>
-                      <span className="text-sm text-muted-foreground">
-                        Detailed invoice with payment information.
-                      </span>
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </div>
-
-              <div className="space-y-3">
-                <Label htmlFor="payment-type" className="text-base font-semibold">
-                  Payment Type
-                  {billFormat === "a4" && <span className="text-destructive ml-1">*</span>}
-                </Label>
-                <RadioGroup
-                  id="payment-type"
-                  value={paymentType ?? undefined}
-                  onValueChange={(value) => setPaymentType(value as PaymentType)}
-                  className="grid gap-3"
-                >
-                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                    <RadioGroupItem value="cash" id="payment-cash" className="mt-1" />
-                    <Label htmlFor="payment-cash" className="flex flex-col flex-1 cursor-pointer">
-                      <span className="font-semibold text-base mb-1">Cash Payment</span>
-                      <span className="text-sm text-muted-foreground">
-                        Customer paid the bill using cash.
-                      </span>
-                    </Label>
-                  </div>
-                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                    <RadioGroupItem value="upi" id="payment-upi" className="mt-1" />
-                    <Label htmlFor="payment-upi" className="flex flex-col flex-1 cursor-pointer">
-                      <span className="font-semibold text-base mb-1">UPI Payment</span>
-                      <span className="text-sm text-muted-foreground">
-                        Customer paid the bill through a UPI transaction.
-                      </span>
-                    </Label>
-                  </div>
-                </RadioGroup>
-                {billFormat === "thermal" && (
-                  <p className="text-xs text-muted-foreground">
-                    Payment type is optional for thermal receipts.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={closePrintDialog}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handlePrintBill}
-              disabled={
-                !printTargetOrder ||
-                (billFormat === "a4" && !paymentType) ||
-                completeOrderMutation.isPending
-              }
-            >
-              <Printer className="mr-2 h-4 w-4" />
-              Print Bill
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={kotDialogOpen} onOpenChange={(open) => (open ? setKotDialogOpen(true) : closeKotDialog())}>
         <DialogContent>
           <DialogHeader>

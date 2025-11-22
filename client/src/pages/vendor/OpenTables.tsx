@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, useCallback } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -9,8 +9,21 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import ManualOrderDialog from "@/components/orders/ManualOrderDialog";
 import { useOrderStream } from "@/hooks/useOrderStream";
-import { queryClient } from "@/lib/queryClient";
-import type { Table, Captain, MenuCategory } from "@shared/schema";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Printer } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { PaymentType, printA4Invoice, printThermalReceipt, type ReceiptItem } from "@/lib/receipt-utils";
+import type { Table, Captain, MenuCategory, Order } from "@shared/schema";
 import type { PrintableOrder } from "@/types/orders";
 import type { MenuItemWithAddons } from "@/types/menu";
 
@@ -45,7 +58,7 @@ const resolveOrderType = (order: PrintableOrder): "dining" | "delivery" | "picku
   return "dining";
 };
 
-const OPEN_ORDER_STATUSES = new Set(["pending", "accepted", "preparing", "ready", "served"]);
+const OPEN_ORDER_STATUSES = new Set(["pending", "accepted", "preparing", "ready", "served", "delivered"]);
 
 const formatINR = (value: number | string | null | undefined) => {
   if (value === null || value === undefined || value === "") {
@@ -59,6 +72,20 @@ const formatINR = (value: number | string | null | undefined) => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);
+};
+
+const roundCurrency = (value: number) =>
+  Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+
+const normalizeRateValue = (value: unknown): number => {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  const numeric = Number.parseFloat(String(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Number(numeric.toFixed(2));
 };
 
 type DisplayOrderItem = {
@@ -115,6 +142,13 @@ const parseOrderItemsForDisplay = (order: PrintableOrder): DisplayOrderItem[] =>
 };
 
 export default function OpenTables() {
+  const { toast } = useToast();
+  
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
+  const [printTargetOrder, setPrintTargetOrder] = useState<PrintableOrder | null>(null);
+  const [paymentType, setPaymentType] = useState<PaymentType | null>(null);
+  const [billFormat, setBillFormat] = useState<"thermal" | "a4">("a4");
+
   const { data: tables, isLoading: loadingTables } = useQuery<Table[]>({
     queryKey: ["/api/vendor/tables"],
   });
@@ -141,6 +175,303 @@ export default function OpenTables() {
     (captains ?? []).forEach((captain) => map.set(captain.id, captain));
     return map;
   }, [captains]);
+
+  const menuItemsById = useMemo(() => {
+    const map = new Map<number, MenuItemWithAddons>();
+    (menuItems ?? []).forEach((item) => {
+      map.set(item.id, item);
+    });
+    return map;
+  }, [menuItems]);
+
+  const categoriesById = useMemo(() => {
+    const map = new Map<number, MenuCategory>();
+    (categories ?? []).forEach((category) => {
+      map.set(category.id, category);
+    });
+    return map;
+  }, [categories]);
+
+  const parseOrderItems = useCallback(
+    (order: Order): ReceiptItem[] => {
+      const rawItems: any[] = [];
+
+      if (Array.isArray(order.items)) {
+        rawItems.push(...order.items);
+      } else if (typeof order.items === "string") {
+        try {
+          const parsed = JSON.parse(order.items);
+          if (Array.isArray(parsed)) {
+            rawItems.push(...parsed);
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      }
+
+      return rawItems.map((item) => {
+        const quantityRaw = Number(item.quantity ?? 1);
+        const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? quantityRaw : 1;
+
+        const priceCandidates = [item.price, item.basePrice, item.unitPrice];
+        let baseUnitPrice = 0;
+        for (const candidate of priceCandidates) {
+          if (candidate === null || candidate === undefined) {
+            continue;
+          }
+          const numeric = Number.parseFloat(String(candidate));
+          if (Number.isFinite(numeric)) {
+            baseUnitPrice = numeric;
+            break;
+          }
+        }
+        baseUnitPrice = Number.isFinite(baseUnitPrice) ? baseUnitPrice : 0;
+
+        let baseSubtotal = Number.parseFloat(String(item.subtotal ?? ""));
+        if (!Number.isFinite(baseSubtotal)) {
+          baseSubtotal = baseUnitPrice * quantity;
+        }
+        baseSubtotal = roundCurrency(baseSubtotal);
+
+        // Try to find menu item by different possible ID fields
+        const itemId = item.itemId ?? item.id ?? item.productId ?? item.menuItemId ?? 0;
+        const menuItem = menuItemsById.get(Number(itemId));
+        const category = menuItem ? categoriesById.get(menuItem.categoryId) : undefined;
+
+        // Get GST rate: prefer item-level, then category-level, then menu item level
+        let gstRate = normalizeRateValue(item.gstRate);
+        if (gstRate === 0 && menuItem) {
+          const menuItemRate = normalizeRateValue(menuItem.gstRate);
+          if (menuItemRate > 0) {
+            gstRate = menuItemRate;
+          }
+        }
+        if (gstRate === 0 && category) {
+          const categoryRate = normalizeRateValue(category.gstRate);
+          if (categoryRate > 0) {
+            gstRate = categoryRate;
+          }
+        }
+
+        // Get GST mode: prefer item-level, then category-level, then menu item level
+        let gstMode: "include" | "exclude" =
+          item.gstMode === "include"
+            ? "include"
+            : item.gstMode === "exclude"
+              ? "exclude"
+              : menuItem?.gstMode === "include"
+                ? "include"
+                : menuItem?.gstMode === "exclude"
+                  ? "exclude"
+                  : category?.gstMode === "include"
+                    ? "include"
+                    : "exclude";
+
+        // Calculate lineTotal and GST amount
+        let lineTotal = Number.parseFloat(
+          String(item.subtotalWithGst ?? item.lineTotal ?? item.total ?? 0),
+        );
+        lineTotal = Number.isFinite(lineTotal) && lineTotal > 0 ? lineTotal : 0;
+
+        let gstAmount = Number.parseFloat(String(item.gstAmount ?? 0));
+        gstAmount = Number.isFinite(gstAmount) && gstAmount >= 0 ? gstAmount : 0;
+
+        // If lineTotal is not set, calculate it based on GST mode
+        if (lineTotal === 0) {
+          if (gstRate > 0) {
+            if (gstMode === "include") {
+              lineTotal = roundCurrency(baseUnitPrice * quantity);
+              if (gstAmount === 0) {
+                gstAmount = roundCurrency(lineTotal * (gstRate / (100 + gstRate)));
+              }
+              baseSubtotal = roundCurrency(lineTotal - gstAmount);
+            } else {
+              if (gstAmount === 0) {
+                gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
+              }
+              lineTotal = roundCurrency(baseSubtotal + gstAmount);
+            }
+          } else {
+            lineTotal = baseSubtotal;
+            gstAmount = 0;
+          }
+        } else {
+          lineTotal = roundCurrency(lineTotal);
+          if (gstAmount === 0 && gstRate > 0) {
+            if (gstMode === "include") {
+              gstAmount = roundCurrency(lineTotal * (gstRate / (100 + gstRate)));
+              baseSubtotal = roundCurrency(lineTotal - gstAmount);
+            } else {
+              gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
+              const expectedLineTotal = roundCurrency(baseSubtotal + gstAmount);
+              if (Math.abs(lineTotal - expectedLineTotal) > 0.01) {
+                baseSubtotal = roundCurrency(lineTotal - gstAmount);
+              }
+            }
+          } else {
+            gstAmount = roundCurrency(gstAmount);
+            if (gstMode === "include" && gstAmount > 0) {
+              baseSubtotal = roundCurrency(lineTotal - gstAmount);
+            }
+          }
+        }
+
+        // Ensure consistency: if GST rate is 0, GST amount should be 0
+        if (gstRate === 0) {
+          gstAmount = 0;
+          lineTotal = baseSubtotal;
+        }
+
+        const unitPrice = roundCurrency(baseUnitPrice);
+        const unitPriceWithTax =
+          gstMode === "include"
+            ? quantity > 0
+              ? roundCurrency(lineTotal / quantity)
+              : lineTotal
+            : unitPrice;
+
+        // Map addons (if any) for printing
+        let addons: { name: string; price?: number }[] | undefined;
+        if (Array.isArray(item.addons) && item.addons.length > 0) {
+          addons = item.addons.map((addon: any) => {
+            const priceValue =
+              addon.price !== undefined && addon.price !== null
+                ? Number.parseFloat(String(addon.price))
+                : undefined;
+            const price = Number.isFinite(priceValue) ? roundCurrency(priceValue as number) : undefined;
+            return {
+              name: String(addon.name ?? "Addon"),
+              price,
+            };
+          });
+        }
+
+        return {
+          name: item.name || "Item",
+          quantity,
+          unitPrice,
+          unitPriceWithTax,
+          baseSubtotal,
+          gstRate,
+          gstMode,
+          gstAmount,
+          lineTotal,
+          addons,
+          notes: typeof item.notes === "string" ? item.notes : null,
+        };
+      });
+    },
+    [categoriesById, menuItemsById],
+  );
+
+  const completeOrderMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      await apiRequest("PUT", `/api/vendor/orders/${orderId}/status`, { status: "completed" });
+    },
+    onSuccess: async () => {
+      await queryClient.refetchQueries({ queryKey: ["/api/vendor/orders"], type: "active" });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/captain/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/tables"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/captain/tables"] });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/vendor/orders"] });
+    },
+  });
+
+  const openPrintDialog = (order: PrintableOrder) => {
+    setPrintTargetOrder(order);
+    setPaymentType(null);
+    setBillFormat("a4");
+    setPrintDialogOpen(true);
+  };
+
+  const closePrintDialog = () => {
+    setPrintDialogOpen(false);
+    setPrintTargetOrder(null);
+    setPaymentType(null);
+  };
+
+  const handlePrintBill = async () => {
+    if (!printTargetOrder) {
+      return;
+    }
+
+    const orderId = printTargetOrder.id;
+    const items = parseOrderItems(printTargetOrder);
+
+    if (billFormat === "a4") {
+      if (!paymentType) {
+        toast({
+          title: "Select payment type",
+          description: "Choose Cash or UPI before generating the bill.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        await printA4Invoice({
+          order: printTargetOrder,
+          items,
+          paymentType,
+          restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
+          restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
+          restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+          paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
+        });
+      } catch (error) {
+        console.error("Receipt print error:", error);
+        toast({
+          title: "Error",
+          description: "Failed to generate bill. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    } else {
+      try {
+        await printThermalReceipt({
+          order: printTargetOrder,
+          items,
+          paymentType: paymentType ?? undefined,
+          restaurantName: printTargetOrder.vendorDetails?.name ?? undefined,
+          restaurantAddress: printTargetOrder.vendorDetails?.address ?? undefined,
+          restaurantPhone: printTargetOrder.vendorDetails?.phone ?? undefined,
+          paymentQrCodeUrl: printTargetOrder.vendorDetails?.paymentQrCodeUrl ?? undefined,
+          title: "Customer Bill",
+          ticketNumber: `BILL-${orderId}`,
+        });
+      } catch (error) {
+        console.error("Thermal bill print error:", error);
+        toast({
+          title: "Error",
+          description: "Failed to print thermal bill. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    try {
+      await completeOrderMutation.mutateAsync(orderId);
+    } catch (error) {
+      console.error("Failed to mark order completed after billing:", error);
+      toast({
+        title: "Order completion failed",
+        description: "Bill was printed, but the order could not be marked completed. Please retry.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Bill generated",
+      description: "Order closed and table marked available.",
+    });
+    closePrintDialog();
+  };
 
   const tableOptions = useMemo(
     () =>
@@ -365,38 +696,49 @@ export default function OpenTables() {
                         </div>
                       </div>
 
-                      <div className="mt-auto flex items-center justify-between gap-2">
-                        <Button asChild variant="outline" size="sm">
-                          <a href="/vendor/orders" className="w-full text-center">
-                            View in Orders
-                          </a>
+                      <div className="mt-auto flex flex-col gap-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <Button asChild variant="outline" size="sm" className="flex-1">
+                            <a href="/vendor/orders" className="w-full text-center">
+                              View in Orders
+                            </a>
+                          </Button>
+                          {menuItems && categories && (
+                            <ManualOrderDialog
+                              trigger={
+                                <Button size="sm" className="flex-1">
+                                  Edit Order
+                                </Button>
+                              }
+                              tables={tableOptions}
+                              menuItems={menuItems}
+                              categories={categories}
+                              submitEndpoint={`/api/vendor/orders/${order.id}`}
+                              submitMethod="PUT"
+                              mode="edit"
+                              defaultTableId={order.tableId ?? undefined}
+                              allowTableSelection={false}
+                              initialOrder={order}
+                              invalidateQueryKeys={[
+                                ["/api/vendor/orders"],
+                                ["/api/vendor/tables"],
+                              ]}
+                              onOrderCreated={() => {
+                                queryClient.invalidateQueries({ queryKey: ["/api/vendor/orders"] });
+                                queryClient.invalidateQueries({ queryKey: ["/api/vendor/tables"] });
+                              }}
+                            />
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() => openPrintDialog(order)}
+                          className="w-full gap-2"
+                        >
+                          <Printer className="h-4 w-4" />
+                          Print Bill
                         </Button>
-                        {menuItems && categories && (
-                          <ManualOrderDialog
-                            trigger={
-                              <Button size="sm" className="w-full">
-                                Edit Order
-                              </Button>
-                            }
-                            tables={tableOptions}
-                            menuItems={menuItems}
-                            categories={categories}
-                            submitEndpoint={`/api/vendor/orders/${order.id}`}
-                            submitMethod="PUT"
-                            mode="edit"
-                            defaultTableId={order.tableId ?? undefined}
-                            allowTableSelection={false}
-                            initialOrder={order}
-                            invalidateQueryKeys={[
-                              ["/api/vendor/orders"],
-                              ["/api/vendor/tables"],
-                            ]}
-                            onOrderCreated={() => {
-                              queryClient.invalidateQueries({ queryKey: ["/api/vendor/orders"] });
-                              queryClient.invalidateQueries({ queryKey: ["/api/vendor/tables"] });
-                            }}
-                          />
-                        )}
                       </div>
                     </>
                   ) : (
@@ -419,6 +761,127 @@ export default function OpenTables() {
           })}
         </div>
       )}
+
+      <Dialog open={printDialogOpen} onOpenChange={(open) => (open ? setPrintDialogOpen(true) : closePrintDialog())}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Bill</DialogTitle>
+            <DialogDescription>
+              Choose the format and payment details before printing the customer bill.
+            </DialogDescription>
+          </DialogHeader>
+
+          {printTargetOrder && (
+            <div className="space-y-4">
+              <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
+                <div className="font-semibold text-base flex items-center gap-2">
+                  <Printer className="h-4 w-4" />
+                  Order #{printTargetOrder.id}
+                </div>
+                <div className="grid gap-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Total Amount:</span>
+                    <span className="font-bold text-primary text-base">{formatINR(printTargetOrder.totalAmount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Customer:</span>
+                    <span className="font-medium">{printTargetOrder.customerName || "Guest"}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Table:</span>
+                    <span className="font-medium">
+                      {printTargetOrder.tableNumber ?? printTargetOrder.tableId ?? "N/A"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Label htmlFor="bill-format" className="text-base font-semibold">Print Format</Label>
+                <RadioGroup
+                  id="bill-format"
+                  value={billFormat}
+                  onValueChange={(value) => setBillFormat(value as "thermal" | "a4")}
+                  className="grid gap-3"
+                >
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="thermal" id="bill-format-thermal" className="mt-1" />
+                    <Label htmlFor="bill-format-thermal" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">Thermal Receipt</span>
+                      <span className="text-sm text-muted-foreground">
+                        Compact ticket for 58mm/80mm printers.
+                      </span>
+                    </Label>
+                  </div>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="a4" id="bill-format-a4" className="mt-1" />
+                    <Label htmlFor="bill-format-a4" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">A4 Invoice</span>
+                      <span className="text-sm text-muted-foreground">
+                        Detailed invoice with payment information.
+                      </span>
+                    </Label>
+                  </div>
+                </RadioGroup>
+              </div>
+
+              <div className="space-y-3">
+                <Label htmlFor="payment-type" className="text-base font-semibold">
+                  Payment Type
+                  {billFormat === "a4" && <span className="text-destructive ml-1">*</span>}
+                </Label>
+                <RadioGroup
+                  id="payment-type"
+                  value={paymentType ?? undefined}
+                  onValueChange={(value) => setPaymentType(value as PaymentType)}
+                  className="grid gap-3"
+                >
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="cash" id="payment-cash" className="mt-1" />
+                    <Label htmlFor="payment-cash" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">Cash Payment</span>
+                      <span className="text-sm text-muted-foreground">
+                        Customer paid the bill using cash.
+                      </span>
+                    </Label>
+                  </div>
+                  <div className="flex items-start space-x-3 rounded-lg border-2 p-4 transition-all hover:bg-muted/50 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <RadioGroupItem value="upi" id="payment-upi" className="mt-1" />
+                    <Label htmlFor="payment-upi" className="flex flex-col flex-1 cursor-pointer">
+                      <span className="font-semibold text-base mb-1">UPI Payment</span>
+                      <span className="text-sm text-muted-foreground">
+                        Customer paid the bill through a UPI transaction.
+                      </span>
+                    </Label>
+                  </div>
+                </RadioGroup>
+                {billFormat === "thermal" && (
+                  <p className="text-xs text-muted-foreground">
+                    Payment type is optional for thermal receipts.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closePrintDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handlePrintBill}
+              disabled={
+                !printTargetOrder ||
+                (billFormat === "a4" && !paymentType) ||
+                completeOrderMutation.isPending
+              }
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Print Bill
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

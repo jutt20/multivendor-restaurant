@@ -697,7 +697,6 @@ const enrichOrderItemsWithGstForVendor = async (
     const priceSource =
       item.price ?? item.basePrice ?? item.unitPrice ?? menuItem.price ?? 0;
     const price = coercePrice(priceSource as ManualOrderItemInput["price"]);
-    const baseSubtotal = roundCurrency(price * quantity);
 
     const gstRateCandidates = [item.gstRate, category?.gstRate];
     let gstRate = 0;
@@ -720,19 +719,32 @@ const enrichOrderItemsWithGstForVendor = async (
     }
 
     let unitPriceWithGst = price;
-    let subtotalWithGst = baseSubtotal;
+    let subtotalWithGst = 0;
     let gstAmount = 0;
+    let baseSubtotal = 0;
 
     if (gstRate > 0) {
       if (gstMode === "include") {
-        unitPriceWithGst = roundCurrency(price * (1 + gstRate / 100));
-        subtotalWithGst = roundCurrency(unitPriceWithGst * quantity);
-        gstAmount = roundCurrency(subtotalWithGst - baseSubtotal);
+        // For included GST: price already includes GST
+        // GST = Item Price * gstRate / (100 + gstRate)
+        // Original price = Item Price - GST
+        const priceWithGst = roundCurrency(price); // Unit price already includes GST
+        subtotalWithGst = roundCurrency(priceWithGst * quantity); // Total with GST included
+        gstAmount = roundCurrency(subtotalWithGst * (gstRate / (100 + gstRate))); // Extract GST
+        baseSubtotal = roundCurrency(subtotalWithGst - gstAmount); // Original price excluding GST
+        unitPriceWithGst = priceWithGst; // Unit price includes GST
       } else {
+        // For excluded GST: GST is added on top
+        baseSubtotal = roundCurrency(price * quantity);
         gstAmount = roundCurrency(baseSubtotal * (gstRate / 100));
         subtotalWithGst = roundCurrency(baseSubtotal + gstAmount);
         unitPriceWithGst = roundCurrency(subtotalWithGst / quantity);
       }
+    } else {
+      // No GST
+      baseSubtotal = roundCurrency(price * quantity);
+      subtotalWithGst = baseSubtotal;
+      unitPriceWithGst = price;
     }
 
     return {
@@ -878,35 +890,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Email/Password login for vendors and admins
+  // Username/Password login for vendors and admins
   app.post('/api/auth/email-login', async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { username, password } = req.body;
 
-      if (!email || !password) {
-        return res.status(400).json({ message: "Email and password are required" });
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required" });
       }
 
-      const user = await storage.getUserByEmail(email);
-      if (!user || !user.password) {
-        return res.status(401).json({ message: "Invalid email or password" });
+      const trimmedUsername = username.trim();
+      if (!trimmedUsername) {
+        return res.status(400).json({ message: "Username cannot be empty" });
+      }
+
+      const user = await storage.getUserByUsername(trimmedUsername);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid username or password" });
+      }
+
+      if (!user.password) {
+        return res.status(401).json({ message: "Invalid username or password" });
       }
 
       const bcrypt = await import('bcryptjs');
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
-        return res.status(401).json({ message: "Invalid email or password" });
+        return res.status(401).json({ message: "Invalid username or password" });
+      }
+
+      // Check if user is active
+      if (user.isActive === false) {
+        return res.status(403).json({ message: "Your account has been deactivated. Please contact support." });
+      }
+
+      // Get vendor info if vendor role (but don't block login - let frontend handle status)
+      let vendorInfo = null;
+      if (user.role === "vendor") {
+        try {
+          const vendor = await storage.getVendorByUserId(user.id);
+          if (vendor) {
+            vendorInfo = {
+              id: vendor.id,
+              status: vendor.status,
+              rejectionReason: vendor.rejectionReason || null,
+            };
+          }
+        } catch (vendorError) {
+          console.error('Error fetching vendor info:', vendorError);
+          // Don't block login if vendor fetch fails
+        }
       }
 
       if (SINGLE_SESSION_ROLES.has(user.role ?? "")) {
-        const sessionId = (req as any).sessionID as string | undefined;
-        const alreadyLoggedInElsewhere = await hasActiveSessionForUser(user.id, sessionId);
-        if (alreadyLoggedInElsewhere) {
-          return res.status(409).json({
-            success: false,
-            message: "Your account is already logged in elsewhere. Please log out from the other session before logging in here.",
-            code: "SESSION_CONFLICT",
-          });
+        try {
+          const sessionId = (req as any).sessionID as string | undefined;
+          const alreadyLoggedInElsewhere = await hasActiveSessionForUser(user.id, sessionId);
+          if (alreadyLoggedInElsewhere) {
+            return res.status(409).json({
+              success: false,
+              message: "Your account is already logged in elsewhere. Please log out from the other session before logging in here.",
+              code: "SESSION_CONFLICT",
+            });
+          }
+        } catch (sessionError) {
+          console.error('Error checking active sessions:', sessionError);
+          // Continue with login if session check fails
         }
       }
 
@@ -934,11 +983,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           id: user.id,
           email: user.email,
           role: user.role,
-        }
+        },
+        vendor: vendorInfo
       });
-    } catch (error) {
-      console.error('Email login error:', error);
-      res.status(500).json({ message: "Login failed. Please try again." });
+    } catch (error: any) {
+      console.error('Login error:', error);
+      console.error('Error stack:', error?.stack);
+      console.error('Error details:', {
+        message: error?.message,
+        name: error?.name,
+        code: error?.code,
+      });
+      res.status(500).json({ 
+        message: "Login failed. Please try again.",
+        error: process.env.NODE_ENV === 'development' ? error?.message : undefined
+      });
     }
   });
 
@@ -987,6 +1046,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Vendor Routes
   // ============================================
   
+  // Check username availability
+  app.get('/api/vendor/check-username', async (req, res) => {
+    try {
+      const { username } = req.query;
+
+      if (!username || typeof username !== "string" || !username.trim()) {
+        return res.status(400).json({ 
+          available: false, 
+          message: "Username is required" 
+        });
+      }
+
+      // Validate format
+      if (!/^[a-zA-Z0-9_]{3,20}$/.test(username.trim())) {
+        return res.status(400).json({ 
+          available: false, 
+          message: "Username must be 3-20 characters long and contain only letters, numbers, and underscores" 
+        });
+      }
+
+      // Check if username already exists
+      const existingUser = await storage.getUserByUsername(username.trim());
+      
+      if (existingUser) {
+        return res.status(200).json({ 
+          available: false, 
+          message: "Username already taken. Please choose another username." 
+        });
+      }
+
+      return res.status(200).json({ 
+        available: true, 
+        message: "Username is available" 
+      });
+    } catch (error) {
+      console.error("Username check error:", error);
+      res.status(500).json({ 
+        available: false, 
+        message: "Failed to check username availability" 
+      });
+    }
+  });
+  
   // Vendor registration with file uploads
 
   app.post(
@@ -1003,6 +1105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const {
           firstName,
           lastName,
+          username,
           email,
           phone,
           password,
@@ -1016,10 +1119,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
           gstin,
         } = req.body;
 
-        // ✅ Step 1: Validate required fields
-        if (!password || password.length < 4) {
+        // ✅ Step 1: Validate all fields and collect errors
+        const fieldErrors: Record<string, string> = {};
+
+        // Validate firstName
+        if (!firstName || typeof firstName !== "string" || !firstName.trim()) {
+          fieldErrors.firstName = "First name is required";
+        }
+
+        // Validate lastName
+        if (!lastName || typeof lastName !== "string" || !lastName.trim()) {
+          fieldErrors.lastName = "Last name is required";
+        }
+
+        // Validate username
+        if (!username || typeof username !== "string" || !username.trim()) {
+          fieldErrors.username = "Username is required";
+        } else if (!/^[a-zA-Z0-9_]{3,20}$/.test(username.trim())) {
+          fieldErrors.username = "Username must be 3-20 characters long and contain only letters, numbers, and underscores";
+        } else {
+          // Check if username already exists
+          const existingUserByUsername = await storage.getUserByUsername(username.trim());
+          if (existingUserByUsername) {
+            fieldErrors.username = "Username already taken. Please choose another username.";
+          }
+        }
+
+        // Validate email
+        if (!email || typeof email !== "string" || !email.trim()) {
+          fieldErrors.email = "Email is required";
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+          fieldErrors.email = "Invalid email format";
+        }
+
+        // Validate phone
+        if (!phone || typeof phone !== "string" || !phone.trim()) {
+          fieldErrors.phone = "Phone number is required";
+        } else if (!/^[\d\s\-\+\(\)]{10,}$/.test(phone.trim())) {
+          fieldErrors.phone = "Please enter a valid phone number";
+        }
+
+        // Validate password
+        if (!password || typeof password !== "string") {
+          fieldErrors.password = "Password is required";
+        } else if (password.length < 4) {
+          fieldErrors.password = "Password must be at least 4 characters long";
+        }
+
+        // Validate GSTIN if provided
+        if (gstin && typeof gstin === "string" && gstin.trim()) {
+          if (!/^[A-Za-z0-9]{1,20}$/.test(gstin.trim())) {
+            fieldErrors.gstin = "GSTIN must be alphanumeric (max 20 characters)";
+          }
+        }
+
+        // Validate restaurant name
+        if (!restaurantName || typeof restaurantName !== "string" || !restaurantName.trim()) {
+          fieldErrors.restaurantName = "Restaurant name is required";
+        }
+
+        // Validate address
+        if (!address || typeof address !== "string" || !address.trim()) {
+          fieldErrors.address = "Address is required";
+        }
+
+        // Validate cuisine type
+        if (!cuisineType || typeof cuisineType !== "string" || !cuisineType.trim()) {
+          fieldErrors.cuisineType = "Cuisine type is required";
+        }
+
+        // Validate GPS location
+        if (!latitude || !longitude) {
+          fieldErrors.gps = "Location must be captured";
+        }
+
+        // Validate required documents - only logo is required
+        if (!files["logo"] || !files["logo"][0]) {
+          fieldErrors.logo = "Logo is required";
+        }
+        // Other documents (businessLicense, taxCert, idProof) are optional
+
+        // If there are validation errors, return them
+        if (Object.keys(fieldErrors).length > 0) {
           return res.status(400).json({
-            message: "Password must be at least 4 characters long",
+            message: "Validation failed",
+            errors: fieldErrors,
           });
         }
 
@@ -1029,6 +1213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         await db.insert(users).values({
           id: userId,
+          username: username.trim(),
           fullName: `${firstName} ${lastName}`,
           email,
           phoneNumber: phone,
@@ -1070,13 +1255,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
           vendorPayload.isPickupEnabled = pickupToggle;
         }
 
-        const validatedData = insertVendorSchema.parse(vendorPayload);
-
-        await db.insert(vendors).values(validatedData);
+        try {
+          const validatedData = insertVendorSchema.parse(vendorPayload);
+          await db.insert(vendors).values(validatedData);
+        } catch (validationError: any) {
+          // Handle Zod validation errors
+          if (validationError.errors && Array.isArray(validationError.errors)) {
+            validationError.errors.forEach((err: any) => {
+              const field = err.path?.[0];
+              if (field) {
+                fieldErrors[field] = err.message || `Invalid ${field}`;
+              }
+            });
+            return res.status(400).json({
+              message: "Validation failed",
+              errors: fieldErrors,
+            });
+          }
+          throw validationError;
+        }
 
         res.json({ success: true, message: "Vendor registered successfully" });
       } catch (error: any) {
         console.error("Vendor registration failed:", error);
+        // If error already has structured format, return it
+        if (error.errors && typeof error.errors === "object") {
+          return res.status(400).json({
+            message: error.message || "Validation failed",
+            errors: error.errors,
+          });
+        }
         res.status(400).json({ message: error.message || "Failed to register vendor" });
       }
     }
@@ -3825,7 +4033,9 @@ app.get(
         isVerified,
         search,
       });
-      res.json(systemUsers);
+      // Filter out admin users - they should manage their profile separately
+      const filteredUsers = systemUsers.filter(user => user.role !== "admin");
+      res.json(filteredUsers);
     } catch (error) {
       console.error("Error fetching system users:", error);
       res.status(500).json({ message: "Failed to fetch system users" });
@@ -3835,26 +4045,37 @@ app.get(
   // Create system user
   app.post('/api/admin/system-users', isAuthenticated, isAdmin, async (req, res) => {
     try {
-      const { fullName, email, phoneNumber, role, password, isActive, isVerified, vendorId } = req.body;
+      const { fullName, username, email, phoneNumber, role, password, isActive, isVerified, vendorId } = req.body;
 
       // Validation
       if (!email || typeof email !== "string" || !email.trim()) {
         return res.status(400).json({ message: "Email is required" });
       }
 
-      if (!password || typeof password !== "string" || password.length < 6) {
-        return res.status(400).json({ message: "Password is required and must be at least 6 characters" });
+      if (!password || typeof password !== "string" || password.length < 4) {
+        return res.status(400).json({ message: "Password is required and must be at least 4 characters" });
       }
 
       if (!role || !["admin", "vendor", "captain", "owner"].includes(role)) {
         return res.status(400).json({ message: "Valid role is required (admin, vendor, captain, or owner)" });
       }
 
-      // Check if email already exists
-      const existingUser = await storage.getUserByEmail(email.trim());
-      if (existingUser) {
-        return res.status(400).json({ message: "Email already exists" });
+      // Validate username if provided (optional for admin-created users)
+      let finalUsername = username?.trim() || null;
+      if (finalUsername) {
+        if (!/^[a-zA-Z0-9_]{3,20}$/.test(finalUsername)) {
+          return res.status(400).json({
+            message: "Username must be 3-20 characters long and contain only letters, numbers, and underscores",
+          });
+        }
+        // Check if username already exists
+        const existingUserByUsername = await storage.getUserByUsername(finalUsername);
+        if (existingUserByUsername) {
+          return res.status(400).json({ message: "Username already taken. Please choose another username." });
+        }
       }
+
+      // Note: Multiple accounts from same email are now allowed (removed duplicate check)
 
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -3862,6 +4083,7 @@ app.get(
       // Create user
       const newUser = await storage.upsertUser({
         id: uuidv4(),
+        username: finalUsername,
         email: email.trim(),
         password: hashedPassword,
         fullName: fullName?.trim() || null,
@@ -3899,7 +4121,7 @@ app.get(
   app.put('/api/admin/system-users/:id', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const userId = req.params.id;
-      const updates: Partial<{ fullName: string; email: string; phoneNumber: string; role: string; isActive: boolean; isVerified: boolean }> = {};
+      const updates: Partial<{ fullName: string; email: string; phoneNumber: string; role: string; isActive: boolean; isVerified: boolean; password: string }> = {};
 
       if (req.body.fullName !== undefined) {
         updates.fullName = typeof req.body.fullName === "string" ? req.body.fullName.trim() : null;
@@ -3918,6 +4140,14 @@ app.get(
       }
       if (req.body.isVerified !== undefined) {
         updates.isVerified = req.body.isVerified === true || req.body.isVerified === "true";
+      }
+      if (req.body.password !== undefined && req.body.password !== "") {
+        if (typeof req.body.password === "string" && req.body.password.length >= 4) {
+          const bcrypt = await import('bcryptjs');
+          updates.password = await bcrypt.hash(req.body.password, 10);
+        } else {
+          return res.status(400).json({ message: "Password must be at least 4 characters long" });
+        }
       }
 
       const updatedUser = await storage.updateUser(userId, updates);
@@ -4993,6 +5223,102 @@ app.get(
     }
   });
 
+  // Edit delivery order (app user)
+  app.put('/api/booking/order/:orderId', verifyMobileAuth, async (req: MobileAuthRequest, res) => {
+    try {
+      const orderId = Number(req.params.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(400).json({ message: "Invalid order ID" });
+      }
+
+      const authUserId = req.userId;
+      if (!authUserId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const {
+        user_id,
+        restaurant_id,
+        items,
+        total_amount,
+        delivery_address,
+        delivery_latitude,
+        delivery_longitude,
+        customer_notes,
+      } = req.body ?? {};
+
+      if (!restaurant_id || !items || !total_amount || !delivery_address) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Ensure body user_id (if provided) matches the token
+      if (user_id && Number(user_id) !== authUserId) {
+        return res.status(400).json({ message: "user_id in body does not match authenticated user" });
+      }
+
+      const vendorId = Number(restaurant_id);
+      if (!Number.isFinite(vendorId) || vendorId <= 0) {
+        return res.status(400).json({ message: "Invalid restaurant_id" });
+      }
+
+      // Get existing order and verify ownership
+      const existingOrder = await storage.getDeliveryOrder(orderId);
+      if (!existingOrder) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      if (existingOrder.userId !== authUserId) {
+        return res.status(403).json({ message: "Unauthorized to edit this order" });
+      }
+
+      if (existingOrder.vendorId !== vendorId) {
+        return res.status(400).json({ message: "Restaurant ID does not match the original order" });
+      }
+
+      // Check if order can be edited (only pending orders)
+      const normalizedStatus = (existingOrder.status ?? "").toLowerCase();
+      if (NON_EDITABLE_ORDER_STATUSES.has(normalizedStatus) || normalizedStatus !== "pending") {
+        return res.status(409).json({ message: "Order cannot be edited. Only pending orders can be edited." });
+      }
+
+      // Normalize items with GST based on vendor configuration
+      const { items: normalizedItems, totalAmount } =
+        await enrichOrderItemsWithGstForVendor(vendorId, items);
+
+      if (normalizedItems.length === 0) {
+        return res.status(400).json({ message: "At least one menu item is required" });
+      }
+
+      const updatedOrder = await storage.updateDeliveryOrderItems(orderId, authUserId, {
+        items: normalizedItems,
+        totalAmount: toCurrencyString(roundCurrency(totalAmount)),
+        deliveryAddress: delivery_address,
+        deliveryLatitude: delivery_latitude?.toString(),
+        deliveryLongitude: delivery_longitude?.toString(),
+        customerNotes: customer_notes || null,
+      });
+
+      broadcastOrderEvent({
+        type: "order-updated",
+        orderId: updatedOrder.id,
+        vendorId,
+        tableId: null,
+      });
+
+      res.json({
+        success: true,
+        order_id: updatedOrder.id,
+        message: "Delivery order updated successfully",
+      });
+    } catch (error: any) {
+      console.error("Error updating delivery order:", error);
+      if (error.message?.startsWith("Menu item ID missing") || error.message?.startsWith("Invalid item price") || error.message?.startsWith("Menu item not found") || error.message?.startsWith("One or more menu items are no longer available") || error.message?.startsWith("Invalid menu item selected")) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: error.message || "Failed to update delivery order" });
+    }
+  });
+
   // ============================================
   // Mobile API Routes (Dine-In via QR)
   // ============================================
@@ -5643,6 +5969,168 @@ app.get(
     }
   });
 
+  // Edit dine-in order (app user)
+  app.put('/api/dinein/order/:orderId', async (req, res) => {
+    try {
+      const orderId = Number(req.params.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(400).json({ message: "Invalid order ID" });
+      }
+
+      const rawPayload = req.body ?? {};
+      let normalizedPayload = { ...rawPayload };
+
+      const hasTableId =
+        normalizedPayload.tableId !== undefined && normalizedPayload.tableId !== null;
+      let vendorIdNumber =
+        normalizedPayload.vendorId !== undefined ? Number(normalizedPayload.vendorId) : undefined;
+      const tableNumberValue =
+        normalizedPayload.tableNumber !== undefined ? Number(normalizedPayload.tableNumber) : undefined;
+      let tableNumberFromNotes: number | undefined;
+
+      if (typeof normalizedPayload.customerNotes === "string") {
+        const match = normalizedPayload.customerNotes.match(/table\s+(-?\d+)/i);
+        if (match) {
+          const parsed = Number(match[1]);
+          if (Number.isFinite(parsed)) {
+            tableNumberFromNotes = parsed;
+          }
+        }
+      }
+
+      const resolvedTableNumber =
+        tableNumberValue !== undefined && Number.isFinite(tableNumberValue)
+          ? tableNumberValue
+          : tableNumberFromNotes;
+
+      // Get existing order first
+      const existingOrder = await storage.getOrder(orderId);
+      if (!existingOrder) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Check if order can be edited (only pending orders)
+      const normalizedStatus = (existingOrder.status ?? "").toLowerCase();
+      if (NON_EDITABLE_ORDER_STATUSES.has(normalizedStatus) || normalizedStatus !== "pending") {
+        return res.status(409).json({ message: "Order cannot be edited. Only pending orders can be edited." });
+      }
+
+      // Verify ownership via customerPhone
+      if (normalizedPayload.customerPhone && existingOrder.customerPhone) {
+        if (normalizedPayload.customerPhone !== existingOrder.customerPhone) {
+          return res.status(403).json({ message: "Unauthorized to edit this order" });
+        }
+      }
+
+      // Resolve table information
+      if (resolvedTableNumber !== undefined && !Number.isNaN(resolvedTableNumber)) {
+        if (vendorIdNumber === undefined || Number.isNaN(vendorIdNumber)) {
+          vendorIdNumber = existingOrder.vendorId;
+        }
+
+        const table = await storage.getTableByVendorAndNumber(vendorIdNumber, resolvedTableNumber);
+        if (!table) {
+          return res.status(404).json({
+            message: `Table number ${resolvedTableNumber} not found for vendor ${vendorIdNumber}`,
+          });
+        }
+
+        normalizedPayload = {
+          ...normalizedPayload,
+          vendorId: table.vendorId,
+          tableId: table.id,
+        };
+        vendorIdNumber = table.vendorId;
+      } else if (hasTableId) {
+        const tableIdNumber = Number(normalizedPayload.tableId);
+        if (!Number.isFinite(tableIdNumber) || tableIdNumber <= 0) {
+          return res.status(400).json({ message: "Invalid tableId" });
+        }
+
+        const table = await storage.getTable(tableIdNumber);
+        if (!table) {
+          return res.status(404).json({ message: `Table ${tableIdNumber} not found` });
+        }
+
+        normalizedPayload.tableId = table.id;
+        if (vendorIdNumber === undefined || Number.isNaN(vendorIdNumber)) {
+          vendorIdNumber = table.vendorId;
+          normalizedPayload.vendorId = table.vendorId;
+        }
+      } else {
+        // Use existing order's tableId and vendorId if not provided
+        if (!vendorIdNumber) {
+          vendorIdNumber = existingOrder.vendorId;
+          normalizedPayload.vendorId = existingOrder.vendorId;
+        }
+        if (!normalizedPayload.tableId && existingOrder.tableId) {
+          normalizedPayload.tableId = existingOrder.tableId;
+        }
+      }
+
+      // Verify vendorId matches
+      if (vendorIdNumber !== existingOrder.vendorId) {
+        return res.status(400).json({ message: "Vendor ID does not match the original order" });
+      }
+
+      // Verify tableId matches if provided
+      if (normalizedPayload.tableId && existingOrder.tableId && normalizedPayload.tableId !== existingOrder.tableId) {
+        return res.status(400).json({ message: "Table ID does not match the original order" });
+      }
+
+      const { tableNumber, ...payloadWithoutTableNumber } = normalizedPayload;
+
+      const { items: normalizedItems, totalAmount } = await enrichOrderItemsWithGstForVendor(
+        vendorIdNumber,
+        payloadWithoutTableNumber.items,
+      );
+
+      if (normalizedItems.length === 0) {
+        return res.status(400).json({ message: "At least one menu item is required" });
+      }
+
+      const customerName = payloadWithoutTableNumber.customerName?.trim();
+      const customerPhone = payloadWithoutTableNumber.customerPhone?.trim();
+      const customerNotes = payloadWithoutTableNumber.customerNotes?.trim();
+
+      const updatedOrder = await storage.updateOrderItems(orderId, vendorIdNumber, {
+        items: normalizedItems,
+        totalAmount: toCurrencyString(roundCurrency(totalAmount)),
+        customerName: customerName && customerName.length > 0 ? customerName : null,
+        customerPhone: customerPhone && customerPhone.length > 0 ? customerPhone : null,
+        customerNotes: customerNotes && customerNotes.length > 0 ? customerNotes : null,
+      });
+
+      try {
+        await storage.updateKotTicketItems(
+          updatedOrder.id,
+          normalizedItems,
+          customerNotes && customerNotes.length > 0 ? customerNotes : null,
+        );
+      } catch (kotError) {
+        console.warn("Failed to update KOT items after order edit:", kotError);
+      }
+
+      broadcastOrderEvent({
+        type: "order-updated",
+        orderId: updatedOrder.id,
+        vendorId: vendorIdNumber,
+        tableId: updatedOrder.tableId ?? null,
+      });
+
+      res.json(updatedOrder);
+    } catch (error: any) {
+      console.error("Error updating dine-in order:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid order data", issues: error.issues });
+      }
+      if (error.message?.startsWith("Menu item ID missing") || error.message?.startsWith("Invalid item price") || error.message?.startsWith("Menu item not found") || error.message?.startsWith("One or more menu items are no longer available") || error.message?.startsWith("Invalid menu item selected")) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: error.message || "Failed to update order" });
+    }
+  });
+
   // ============================================
   // Mobile API Routes (Pickup Orders)
   // ============================================
@@ -5745,6 +6233,92 @@ app.get(
     } catch (error) {
       console.error("Error fetching pickup orders:", error);
       res.status(500).json({ message: "Failed to fetch pickup orders" });
+    }
+  });
+
+  // Edit pickup order (app user)
+  app.put('/api/pickup/order/:orderId', async (req, res) => {
+    try {
+      const orderId = Number(req.params.orderId);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(400).json({ message: "Invalid order ID" });
+      }
+
+      const { user_id, restaurant_id, items, total_amount, customer_phone, pickup_time, customer_notes } = req.body;
+
+      if (!user_id || !restaurant_id || !items || !total_amount) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const vendorId = Number(restaurant_id);
+      if (!Number.isFinite(vendorId) || vendorId <= 0) {
+        return res.status(400).json({ message: "Invalid restaurant_id" });
+      }
+
+      // Get existing order and verify ownership
+      const existingOrder = await storage.getPickupOrder(orderId);
+      if (!existingOrder) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      if (existingOrder.userId !== user_id) {
+        return res.status(403).json({ message: "Unauthorized to edit this order" });
+      }
+
+      if (existingOrder.vendorId !== vendorId) {
+        return res.status(400).json({ message: "Restaurant ID does not match the original order" });
+      }
+
+      // Check if order can be edited (only pending orders)
+      const normalizedStatus = (existingOrder.status ?? "").toLowerCase();
+      if (NON_EDITABLE_ORDER_STATUSES.has(normalizedStatus) || normalizedStatus !== "pending") {
+        return res.status(409).json({ message: "Order cannot be edited. Only pending orders can be edited." });
+      }
+
+      // Validate vendor has pickup enabled
+      const vendor = await storage.getVendor(vendorId);
+      if (!vendor) {
+        return res.status(404).json({ message: "Restaurant not found" });
+      }
+      if (!vendor.isPickupEnabled) {
+        return res.status(403).json({ message: "Pickup service is not available for this restaurant" });
+      }
+
+      // Normalize items with GST based on vendor configuration
+      const { items: normalizedItems, totalAmount } =
+        await enrichOrderItemsWithGstForVendor(vendorId, items);
+
+      if (normalizedItems.length === 0) {
+        return res.status(400).json({ message: "At least one menu item is required" });
+      }
+
+      const updatedOrder = await storage.updatePickupOrderItems(orderId, user_id, {
+        items: normalizedItems,
+        totalAmount: toCurrencyString(roundCurrency(totalAmount)),
+        customerPhone: customer_phone || null,
+        pickupTime: pickup_time ? new Date(pickup_time) : null,
+        customerNotes: customer_notes || null,
+      });
+
+      broadcastOrderEvent({
+        type: "order-updated",
+        orderId: updatedOrder.id,
+        vendorId,
+        tableId: null,
+      });
+
+      res.json({
+        success: true,
+        order_id: updatedOrder.id,
+        pickup_reference: updatedOrder.pickupReference,
+        message: "Pickup order updated successfully",
+      });
+    } catch (error: any) {
+      console.error("Error updating pickup order:", error);
+      if (error.message?.startsWith("Menu item ID missing") || error.message?.startsWith("Invalid item price") || error.message?.startsWith("Menu item not found") || error.message?.startsWith("One or more menu items are no longer available") || error.message?.startsWith("Invalid menu item selected")) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: error.message || "Failed to update pickup order" });
     }
   });
 

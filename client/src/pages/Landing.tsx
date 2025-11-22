@@ -25,6 +25,8 @@ import {
   CheckCircle2,
   ArrowRight,
   Upload,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import heroImage from "@assets/generated_images/Restaurant_owner_with_tablet_dashboard_e0543e9e.png";
 import logoImage from "@assets/generated_images/logo.jpg";
@@ -69,7 +71,7 @@ export default function Landing() {
                 data-testid="button-register"
                 onClick={() => setIsRegistering(true)}
               >
-                Get Started
+                Vendor Sign Up
               </Button>
             </div>
           </div>
@@ -269,6 +271,7 @@ function CaptainLoginForm({ onClose }: { onClose: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
 
@@ -320,15 +323,30 @@ function CaptainLoginForm({ onClose }: { onClose: () => void }) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="captain-password">Password</Label>
-        <Input
-          id="captain-password"
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          data-testid="input-captain-password"
-          onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-        />
+        <div className="relative">
+          <Input
+            id="captain-password"
+            type={showPassword ? "text" : "password"}
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            data-testid="input-captain-password"
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            className="pr-10"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            tabIndex={-1}
+          >
+            {showPassword ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </button>
+        </div>
       </div>
       {error && (
         <div className="text-sm text-red-600 dark:text-red-400">{error}</div>
